@@ -5,6 +5,8 @@ uma lanchonete em linguagem natural, identificando ação, produto e quantidade 
 análise léxica e validando o pedido por análise semântica — ver
 [enunciado.md](enunciado.md).
 
+**Repositório:** https://github.com/Kauhan33/projeto-python-compiladores
+
 ## Como funciona
 
 1. **Análise léxica** ([lexer.py](lexer.py)): quebra a frase digitada em `Token`s
