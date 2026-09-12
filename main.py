@@ -2,7 +2,8 @@
 Analisador de Pedidos da Lanchonete — ponto de entrada.
 
 Uso:
-    python main.py            -> modo interativo
+    python main.py            -> modo interativo (digitado)
+    python main.py --gui      -> abre a interface gráfica (ver gui.py)
     python main.py --demo     -> roda uma lista de pedidos de exemplo (inclui erros propositais)
 
 Comandos aceitos (digite "ajuda" dentro do programa para a lista completa):
@@ -69,8 +70,25 @@ def rodar_interativo() -> None:
         print(f"Sistema: {processar(frase, pedido, verboso=False)}")
 
 
+def abrir_interface_grafica() -> None:
+    """Abre a janela do gui.py. O import fica aqui dentro para o modo
+    terminal continuar funcionando em instalações sem tkinter."""
+    try:
+        from gui import main as abrir_janela
+    except ImportError as erro:
+        print(
+            "Não foi possível abrir a interface gráfica: tkinter não está "
+            f"disponível nesta instalação do Python ({erro}).\n"
+            "Use o modo terminal: python main.py"
+        )
+        return
+    abrir_janela()
+
+
 if __name__ == "__main__":
-    if "--demo" in sys.argv:
+    if "--gui" in sys.argv:
+        abrir_interface_grafica()
+    elif "--demo" in sys.argv:
         rodar_demo()
     else:
         rodar_interativo()
