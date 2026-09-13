@@ -86,7 +86,7 @@ class JanelaLanchonete:
         self.raiz = tk.Tk()
         self.raiz.title("Lanchonete — Analisador de Pedidos")
         self.raiz.configure(bg=COR_FUNDO)
-        self.raiz.minsize(900, 620)
+        self.raiz.minsize(980, 660)
 
         self._montar_interface()
         self._atualizar_barras(self.medidor.niveis())
@@ -137,6 +137,12 @@ class JanelaLanchonete:
         for produto in sorted(cardapio.PRODUTOS, key=lambda p: p.preco):
             linha = tk.Frame(coluna, bg=COR_PAINEL)
             linha.pack(fill=tk.X, padx=14, pady=1)
+            # o botão não mexe no pedido diretamente: manda o comando
+            # equivalente ("quero 1 pizza") pelo mesmo caminho da voz e do
+            # texto, para as três entradas fazerem exatamente a mesma coisa
+            self._botao(
+                linha, "+", lambda p=produto: self._comando_por_botao(f"quero 1 {p.sinonimos[0]}")
+            ).pack(side=tk.LEFT, padx=(0, 8))
             tk.Label(
                 linha, text=produto.nome, bg=COR_PAINEL, fg=COR_TEXTO, font=self.fonte_normal
             ).pack(side=tk.LEFT)
@@ -145,9 +151,15 @@ class JanelaLanchonete:
                 fg=COR_TEXTO_FRACO, font=self.fonte_normal,
             ).pack(side=tk.RIGHT)
 
-        tk.Label(
-            coluna, text="", bg=COR_PAINEL
-        ).pack(pady=6)
+        tk.Label(coluna, text="", bg=COR_PAINEL).pack(pady=6)
+
+    def _botao(self, pai, texto: str, comando, cor: str | None = None) -> tk.Button:
+        """Botão pequeno e quadrado, no estilo da tela."""
+        return tk.Button(
+            pai, text=texto, command=comando, width=2,
+            bg=cor or COR_ENTRADA, fg=COR_TEXTO, activebackground=COR_ARCO,
+            relief=tk.FLAT, font=self.fonte_normal, cursor="hand2",
+        )
 
     def _montar_microfone(self, pai: tk.Frame) -> None:
         coluna = tk.Frame(pai, bg=COR_FUNDO)
@@ -205,18 +217,27 @@ class JanelaLanchonete:
             coluna, text="Pedido atual", bg=COR_PAINEL, fg=COR_DESTAQUE, font=self.fonte_secao
         ).pack(anchor="w", padx=14, pady=(12, 6))
 
-        self.lista_pedido = tk.Text(
-            coluna, width=30, height=11, bg=COR_PAINEL, fg=COR_TEXTO,
-            font=self.fonte_mono, relief=tk.FLAT, padx=12, wrap=tk.WORD,
-        )
-        self.lista_pedido.pack(fill=tk.BOTH, expand=True)
-        self.lista_pedido.configure(state=tk.DISABLED)
+        # as linhas do pedido são widgets recriados a cada mudança (ver
+        # _atualizar_pedido); este frame é só o contêiner delas
+        self.lista_pedido = tk.Frame(coluna, bg=COR_PAINEL, width=290)
+        self.lista_pedido.pack(fill=tk.BOTH, expand=True, padx=12)
+        self.lista_pedido.pack_propagate(False)
+
+        rodape = tk.Frame(coluna, bg=COR_PAINEL)
+        rodape.pack(fill=tk.X, padx=14, pady=(4, 12))
 
         self.rotulo_total = tk.Label(
-            coluna, text="Total: R$ 0,00", bg=COR_PAINEL, fg=COR_DESTAQUE,
+            rodape, text="Total: R$ 0,00", bg=COR_PAINEL, fg=COR_DESTAQUE,
             font=tkfont.Font(family="Segoe UI", size=13, weight="bold"),
         )
-        self.rotulo_total.pack(anchor="e", padx=14, pady=(4, 12))
+        self.rotulo_total.pack(side=tk.RIGHT)
+
+        tk.Button(
+            rodape, text="Limpar pedido",
+            command=lambda: self._comando_por_botao("cancelar pedido"),
+            bg=COR_ENTRADA, fg=COR_TEXTO_FRACO, activebackground=COR_ARCO,
+            relief=tk.FLAT, font=self.fonte_normal, cursor="hand2", padx=8,
+        ).pack(side=tk.LEFT)
 
     def _montar_conversa(self) -> None:
         painel = tk.Frame(self.raiz, bg=COR_FUNDO)
@@ -344,24 +365,48 @@ class JanelaLanchonete:
     # ------------------------------------------------------------------
 
     def _atualizar_pedido(self) -> None:
-        """Redesenha o painel do pedido a partir do estado atual."""
-        self.lista_pedido.configure(state=tk.NORMAL)
-        self.lista_pedido.delete("1.0", tk.END)
+        """Redesenha o painel do pedido a partir do estado atual: uma linha
+        por item, com os botões de tirar uma unidade e de tirar o item."""
+        for filho in self.lista_pedido.winfo_children():
+            filho.destroy()
 
         if self.pedido.vazio():
-            self.lista_pedido.insert(tk.END, "(nenhum item ainda)\n")
+            tk.Label(
+                self.lista_pedido, text="(nenhum item ainda)", bg=COR_PAINEL,
+                fg=COR_TEXTO_FRACO, font=self.fonte_normal,
+            ).pack(anchor="w", pady=2)
         else:
             for produto, quantidade in self.pedido.itens.items():
-                nome = cardapio.nome_exibicao(produto)
-                subtotal = cardapio.preco(produto) * quantidade
-                self.lista_pedido.insert(tk.END, f"{quantidade}x {nome}\n")
-                self.lista_pedido.insert(tk.END, f"      R$ {subtotal:.2f}\n")
+                self._linha_do_pedido(produto, quantidade)
 
-        self.lista_pedido.configure(state=tk.DISABLED)
         self.rotulo_total.config(text=f"Total: R$ {self.pedido.total():.2f}")
 
+    def _linha_do_pedido(self, produto: str, quantidade: int) -> None:
+        nome_falado = cardapio.POR_CODIGO[produto].sinonimos[0]
+        linha = tk.Frame(self.lista_pedido, bg=COR_PAINEL)
+        linha.pack(fill=tk.X, pady=2)
+
+        # cada botão dispara o comando equivalente — "remova 1 pizza" e
+        # "remova todas as pizzas" — pelo mesmo pipeline da voz e do texto
+        self._botao(
+            linha, "−", lambda: self._comando_por_botao(f"remova 1 {nome_falado}")
+        ).pack(side=tk.LEFT)
+        self._botao(
+            linha, "×", lambda: self._comando_por_botao(f"remova todas as {nome_falado}"),
+            cor="#5a2e22",
+        ).pack(side=tk.LEFT, padx=(4, 8))
+
+        tk.Label(
+            linha, text=f"{quantidade}x {cardapio.nome_exibicao(produto)}",
+            bg=COR_PAINEL, fg=COR_TEXTO, font=self.fonte_normal, anchor="w",
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(
+            linha, text=f"R$ {cardapio.preco(produto) * quantidade:.2f}",
+            bg=COR_PAINEL, fg=COR_TEXTO_FRACO, font=self.fonte_normal,
+        ).pack(side=tk.RIGHT)
+
     # ------------------------------------------------------------------
-    # Entrada por texto
+    # Entrada por texto e por botão
     # ------------------------------------------------------------------
 
     def _enviar_texto(self) -> None:
@@ -372,7 +417,16 @@ class JanelaLanchonete:
         if not frase:
             return
         self.entrada.delete(0, tk.END)
-        self._escrever(f"Cliente: {frase}", "cliente")
+        self._executar_comando_digitado(frase, origem="Cliente")
+
+    def _comando_por_botao(self, frase: str) -> None:
+        """Um clique vira o comando em texto que ele representa. Assim o
+        botão aparece no histórico como qualquer outro pedido, e a análise
+        léxica/semântica é uma só para botão, texto e voz."""
+        self._executar_comando_digitado(frase, origem="Cliente (botão)")
+
+    def _executar_comando_digitado(self, frase: str, origem: str) -> None:
+        self._escrever(f"{origem}: {frase}", "cliente")
 
         if frase.lower() in COMANDOS_SAIR:
             self.encerrar()
@@ -380,7 +434,7 @@ class JanelaLanchonete:
 
         with self._trava_pedido:
             resposta = self._processar(frase)
-        self._escrever(f"Sistema: {resposta}", "sistema")  # digitado: sem áudio
+        self._escrever(f"Sistema: {resposta}", "sistema")  # sem áudio: não foi voz
         self._atualizar_pedido()
 
     # ------------------------------------------------------------------

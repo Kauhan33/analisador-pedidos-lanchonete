@@ -14,6 +14,7 @@ from __future__ import annotations
 import itertools
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -50,19 +51,24 @@ ACOES: dict[str, str] = {
     "coloca": "ADICIONAR", "colocar": "ADICIONAR", "bota": "ADICIONAR", "botar": "ADICIONAR",
     "ve": "ADICIONAR", "traz": "ADICIONAR", "trazer": "ADICIONAR", "manda": "ADICIONAR",
     "inclui": "ADICIONAR", "incluir": "ADICIONAR",
+    "adicione": "ADICIONAR", "coloque": "ADICIONAR", "inclua": "ADICIONAR",
+    "bote": "ADICIONAR", "traga": "ADICIONAR", "mande": "ADICIONAR",
     # REMOVER
     "remover": "REMOVER", "remove": "REMOVER", "tirar": "REMOVER", "tira": "REMOVER",
     "excluir": "REMOVER", "exclui": "REMOVER", "retirar": "REMOVER", "retira": "REMOVER",
+    "remova": "REMOVER", "tire": "REMOVER", "retire": "REMOVER", "exclua": "REMOVER",
+    "apague": "REMOVER", "apagar": "REMOVER",
     # CANCELAR
     "cancelar": "CANCELAR", "cancela": "CANCELAR", "limpar": "CANCELAR", "limpa": "CANCELAR",
-    "esvaziar": "CANCELAR", "esvazia": "CANCELAR",
+    "esvaziar": "CANCELAR", "esvazia": "CANCELAR", "cancele": "CANCELAR", "limpe": "CANCELAR",
     # FINALIZAR
     "finalizar": "FINALIZAR", "finaliza": "FINALIZAR", "concluir": "FINALIZAR",
     "conclui": "FINALIZAR", "fechar": "FINALIZAR", "fecha": "FINALIZAR",
     "encerrar": "FINALIZAR", "encerra": "FINALIZAR", "pagar": "FINALIZAR",
+    "finalize": "FINALIZAR", "feche": "FINALIZAR", "encerre": "FINALIZAR",
     # MOSTRAR
     "mostrar": "MOSTRAR", "mostra": "MOSTRAR", "ver": "MOSTRAR", "listar": "MOSTRAR",
-    "lista": "MOSTRAR", "exibir": "MOSTRAR", "exibe": "MOSTRAR",
+    "lista": "MOSTRAR", "exibir": "MOSTRAR", "exibe": "MOSTRAR", "mostre": "MOSTRAR",
     # CARDAPIO / preço
     "cardapio": "CARDAPIO", "menu": "CARDAPIO", "precos": "CARDAPIO", "preco": "CARDAPIO",
     "custa": "CARDAPIO", "custam": "CARDAPIO", "valor": "CARDAPIO", "valores": "CARDAPIO",
@@ -97,6 +103,22 @@ def acao_por_radical(palavra: str) -> str | None:
     return None
 
 
+def acao_aproximada(palavra: str) -> str | None:
+    """Verbo de comando parecido com `palavra` — o reconhecimento de fala
+    erra o verbo tanto quanto erra o nome do produto, e "adissione" ou
+    "quiero" não devem derrubar um pedido inteiro."""
+    if len(palavra) < 4:
+        return None
+    melhor, melhor_nota = None, 0.0
+    for verbo, acao in ACOES.items():
+        if len(verbo) < 4 or acao in ("CONFIRMAR", "NEGAR"):
+            continue
+        nota = SequenceMatcher(None, palavra, verbo).ratio()
+        if nota > melhor_nota:
+            melhor, melhor_nota = acao, nota
+    return melhor if melhor_nota >= LIMIAR_VERBO_APROXIMADO else None
+
+
 # Ações que são um pedido de fato (mexem no carrinho ou consultam algo).
 # CONFIRMAR/NEGAR ficam de fora: sozinhos, "sim" ou "não" não são comando.
 ACOES_DE_COMANDO = {
@@ -123,6 +145,24 @@ EXTENSO: dict[str, int] = {
     "seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10, "duzia": 12,
 }
 
+# Quantidades que só fazem sentido diante do carrinho: "remover TODAS as
+# águas", "tirar METADE dos refris". Viram tokens QUANTIDADE com um valor
+# simbólico, e a semântica resolve o número olhando o pedido atual.
+QUANTIDADES_ESPECIAIS: dict[str, str] = {
+    "todas": "todas", "todos": "todas", "toda": "todas", "todo": "todas", "tudo": "todas",
+    "metade": "metade",
+}
+
+# "um de cada" — o produto é "todos os do cardápio". Vira um token PRODUTO
+# com o código simbólico "*", expandido pela semântica.
+PALAVRA_CADA = "cada"
+PRODUTO_TODOS = "*"
+
+# Similaridade mínima para aceitar um verbo transcrito errado ("adissione",
+# "removi" -> "remova"). Só palavras com 4+ letras entram nessa comparação:
+# as curtas ("ve", "ok", "sim") casariam com qualquer coisa.
+LIMIAR_VERBO_APROXIMADO = 0.8
+
 # Palavras que ligam a frase sem acrescentar significado próprio. "e" está
 # aqui e é importante: é o que separa os itens em "2 hambúrguer E 1 suco".
 # As demais são o que sobra de frases naturais de balcão ("eu vou querer",
@@ -131,7 +171,7 @@ EXTENSO: dict[str, int] = {
 PALAVRAS_IGNORADAS = {
     "de", "do", "da", "dos", "das", "o", "a", "os", "as", "por", "favor",
     "para", "pra", "com", "e", "no", "na", "mais", "meu", "minha", "gostaria",
-    "queria", "pedido", "conta", "tudo", "isso", "ai", "me", "diga",
+    "queria", "pedido", "conta", "isso", "ai", "me", "diga",
     "qual", "quais", "sao", "voces", "tem", "eu", "nos", "vou", "vamos",
     "pode", "poderia", "podia", "quanto", "quantos", "esta", "fica",
     "sai", "deu", "entao", "ne", "obrigado", "obrigada", "oi", "ola", "bom",
@@ -255,6 +295,14 @@ def analisar_lexico(frase: str) -> list[Token]:
             tokens.append(Token(TipoToken.QUANTIDADE, str(EXTENSO[palavra]), palavra))
             indice += 1
             continue
+        if palavra in QUANTIDADES_ESPECIAIS:
+            tokens.append(Token(TipoToken.QUANTIDADE, QUANTIDADES_ESPECIAIS[palavra], palavra))
+            indice += 1
+            continue
+        if palavra == PALAVRA_CADA:
+            tokens.append(Token(TipoToken.PRODUTO, PRODUTO_TODOS, palavra))
+            indice += 1
+            continue
 
         # 5) conectivo
         if palavra in PALAVRAS_IGNORADAS:
@@ -270,7 +318,14 @@ def analisar_lexico(frase: str) -> list[Token]:
             indice += 1
             continue
 
-        # 7) nada reconhecido
+        # 7) verbo parecido com algum conhecido (transcrição errada)
+        acao = acao_aproximada(palavra)
+        if acao:
+            tokens.append(Token(TipoToken.ACAO, acao, palavra))
+            indice += 1
+            continue
+
+        # 8) nada reconhecido
         tokens.append(Token(TipoToken.DESCONHECIDO, palavra, palavra))
         indice += 1
 

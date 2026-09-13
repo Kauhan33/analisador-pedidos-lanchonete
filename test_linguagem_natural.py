@@ -10,6 +10,7 @@ Rodar com:  python -m unittest test_linguagem_natural.py -v
 
 import unittest
 
+import cardapio
 from lexer import TipoToken, analisar_lexico, candidatos_singular
 from semantic import Pedido, interpretar
 
@@ -216,6 +217,100 @@ class TestSessaoRealDeUso(unittest.TestCase):
         self.assertEqual(self.pedido.itens, {"refrigerante": 2})
         self.assertIn("não reconheci 'viagem'", resposta)
         self.assertNotIn("Não temos", resposta)
+
+
+class TestQuantidadesEspeciais(unittest.TestCase):
+    """"todas", "metade" e "um de cada" não são números: só viram número
+    diante do carrinho (ou do cardápio). Vieram de uma sessão real em que
+    "remover todas as águas" tirava uma só."""
+
+    def setUp(self) -> None:
+        self.pedido = Pedido()
+
+    def _dizer(self, frase: str) -> str:
+        return interpretar(analisar_lexico(frase), self.pedido)
+
+    def test_remover_todas(self):
+        self._dizer("5 aguas")
+        resposta = self._dizer("remover todas as aguas")
+        self.assertIn("Removido 5x", resposta)
+        self.assertTrue(self.pedido.vazio())
+
+    def test_variacoes_de_todas(self):
+        for frase in ("tire todos os sucos", "remova toda a agua", "tira tudo de refri"):
+            with self.subTest(frase=frase):
+                self.pedido.itens = {"suco": 3, "agua": 2, "refrigerante": 4}
+                self._dizer(frase)
+                self.assertEqual(len(self.pedido.itens), 2)
+
+    def test_remover_metade(self):
+        self._dizer("5 aguas")
+        self._dizer("remover metade das aguas")
+        self.assertEqual(self.pedido.itens, {"agua": 3})
+
+    def test_metade_de_um_tira_um(self):
+        self._dizer("1 agua")
+        self._dizer("tire metade das aguas")
+        self.assertTrue(self.pedido.vazio())
+
+    def test_todas_de_item_ausente(self):
+        self.assertIn("não tem", self._dizer("remover todas as pizzas").lower())
+
+    def test_um_de_cada_adiciona_todo_o_cardapio(self):
+        self._dizer("adicione um de cada")
+        self.assertEqual(len(self.pedido.itens), len(cardapio.PRODUTOS))
+        self.assertTrue(all(qtd == 1 for qtd in self.pedido.itens.values()))
+
+    def test_dois_de_cada(self):
+        self._dizer("quero dois de cada")
+        self.assertTrue(all(qtd == 2 for qtd in self.pedido.itens.values()))
+
+    def test_remover_um_de_cada_so_mexe_no_que_esta_no_carrinho(self):
+        self.pedido.itens = {"pizza": 2, "suco": 1}
+        self._dizer("remova um de cada")
+        self.assertEqual(self.pedido.itens, {"pizza": 1})
+
+    def test_um_de_cada_com_carrinho_vazio_ao_remover(self):
+        self.assertIn("vazio", self._dizer("remova um de cada"))
+
+    def test_tudo_sem_produto_esvazia(self):
+        self._dizer("2 pizza e 1 suco")
+        self.assertIn("cancelado", self._dizer("tire tudo").lower())
+        self.assertTrue(self.pedido.vazio())
+
+    def test_todas_ao_pedir_pede_a_quantidade(self):
+        resposta = self._dizer("adicionar todas as aguas")
+        self.assertIn("diga a quantidade", resposta)
+        self.assertTrue(self.pedido.vazio())
+
+
+class TestVerbosAproximados(unittest.TestCase):
+    """O reconhecimento de fala erra o verbo tanto quanto o produto."""
+
+    def _dizer(self, frase: str, pedido: Pedido) -> str:
+        return interpretar(analisar_lexico(frase), pedido)
+
+    def test_verbo_transcrito_errado(self):
+        for frase, esperado in [
+            ("quiero 2 refris", {"refrigerante": 2}),
+            ("adissione uma pizza", {"pizza": 1}),
+            ("adicioni um suco", {"suco": 1}),
+        ]:
+            with self.subTest(frase=frase):
+                pedido = Pedido()
+                self._dizer(frase, pedido)
+                self.assertEqual(pedido.itens, esperado)
+
+    def test_remover_transcrito_errado(self):
+        pedido = Pedido()
+        pedido.itens = {"pizza": 2}
+        self._dizer("remuva a pizza", pedido)
+        self.assertEqual(pedido.itens, {"pizza": 1})
+
+    def test_palavra_curta_nao_e_aproximada(self):
+        """"jose" não pode virar verbo por parecer com algo."""
+        tokens = analisar_lexico("jose 3 saladas")
+        self.assertEqual([t.lexema for t in tokens if t.tipo == TipoToken.DESCONHECIDO], ["jose"])
 
 
 class TestConsultaDePreco(unittest.TestCase):

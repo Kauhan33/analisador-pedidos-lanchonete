@@ -131,7 +131,21 @@ class TestJanela(unittest.TestCase):
         return self.janela.conversa.get("1.0", tk.END)
 
     def _painel_pedido(self) -> str:
-        return self.janela.lista_pedido.get("1.0", tk.END)
+        """Todo o texto dos rótulos do painel do pedido, em uma string."""
+        textos = []
+        for linha in self.janela.lista_pedido.winfo_children():
+            for widget in [linha, *linha.winfo_children()]:
+                try:
+                    textos.append(str(widget.cget("text")))
+                except tk.TclError:
+                    pass
+        return " | ".join(textos)
+
+    def _botoes_do_pedido(self) -> list[tk.Button]:
+        return [
+            w for linha in self.janela.lista_pedido.winfo_children()
+            for w in linha.winfo_children() if isinstance(w, tk.Button)
+        ]
 
     def test_pedido_digitado_e_processado(self):
         self._digitar("pedir 2 hamburguer e 1 refrigerante")
@@ -153,6 +167,42 @@ class TestJanela(unittest.TestCase):
         with patch("gui.falar") as falar_mock:
             self._digitar("pedir hamburguer")
         falar_mock.assert_not_called()
+
+    # --- botões: passam pelo mesmo pipeline que texto e voz ---
+
+    def test_botao_mais_do_cardapio_adiciona_um(self):
+        self.janela._comando_por_botao("quero 1 pizza")
+        self.janela._comando_por_botao("quero 1 pizza")
+        self.assertEqual(self.janela.pedido.itens, {"pizza": 2})
+        self.assertIn("Cliente (botão): quero 1 pizza", self._conversa())
+
+    def test_cada_item_do_pedido_tem_botoes_de_tirar_um_e_tirar_todos(self):
+        self._digitar("pedir 3 pizza e 1 suco")
+        botoes = self._botoes_do_pedido()
+        self.assertEqual(len(botoes), 4)  # 2 itens x (− e ×)
+
+        botoes[0].invoke()  # "−" da pizza
+        self.assertEqual(self.janela.pedido.itens, {"pizza": 2, "suco": 1})
+
+        # o painel é redesenhado a cada mudança, então os botões são outros
+        self._botoes_do_pedido()[1].invoke()  # "×" da pizza
+        self.assertEqual(self.janela.pedido.itens, {"suco": 1})
+
+    def test_botao_limpar_esvazia(self):
+        self._digitar("pedir 2 pizza")
+        self.janela._comando_por_botao("cancelar pedido")
+        self.assertTrue(self.janela.pedido.vazio())
+        self.assertIn("nenhum item", self._painel_pedido())
+
+    def test_botao_nao_fala(self):
+        with patch("gui.falar") as falar_mock:
+            self.janela._comando_por_botao("quero 1 suco")
+        falar_mock.assert_not_called()
+
+    def test_botao_com_produto_composto(self):
+        """"batata frita" tem espaço: o comando gerado precisa ser entendido."""
+        self.janela._comando_por_botao("quero 1 batata frita")
+        self.assertEqual(self.janela.pedido.itens, {"batata_frita": 1})
 
     def test_texto_fantasma_nao_entra_no_pedido(self):
         from gui import TEXTO_AJUDA_ENTRADA

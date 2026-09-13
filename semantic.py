@@ -33,10 +33,16 @@ LIMIAR_AUTOCORRECAO = 0.85
 
 @dataclass
 class ItemPedido:
-    """Uma dupla quantidade/produto já associada pela análise semântica."""
+    """Uma dupla quantidade/produto já associada pela análise semântica.
+
+    `especial` guarda quantidades que ainda não são um número ("todas",
+    "metade"): elas só viram número diante do carrinho, em _expandir().
+    `produto` pode ser "*" (todos), pelo mesmo motivo.
+    """
 
     quantidade: int
     produto: str
+    especial: str | None = None
 
     def descrever(self) -> str:
         return f"{self.quantidade}x {nome_exibicao(self.produto)}"
@@ -119,16 +125,21 @@ def associar_itens(tokens: list[Token]) -> list[ItemPedido]:
     itens: list[ItemPedido] = []
     quantidade_pendente: int | None = None
 
+    especial_pendente: str | None = None
+
     for token in tokens:
         if token.tipo == TipoToken.QUANTIDADE:
-            quantidade_pendente = int(token.valor)
+            if token.valor.isdigit():
+                quantidade_pendente, especial_pendente = int(token.valor), None
+            else:
+                quantidade_pendente, especial_pendente = None, token.valor
         elif token.tipo == TipoToken.PRODUTO:
             # comparar com None em vez de usar "or 1": a quantidade zero é
             # um valor legítimo aqui, e precisa chegar à validação para ser
             # recusada — "or 1" a transformaria silenciosamente em 1
             quantidade = 1 if quantidade_pendente is None else quantidade_pendente
-            itens.append(ItemPedido(quantidade, token.valor))
-            quantidade_pendente = None  # a quantidade vale para um produto só
+            itens.append(ItemPedido(quantidade, token.valor, especial_pendente))
+            quantidade_pendente = especial_pendente = None  # valem para um produto só
 
     return _consolidar(itens)
 
@@ -139,10 +150,14 @@ def _consolidar(itens: list[ItemPedido]) -> list[ItemPedido]:
     O cliente pode chamar o mesmo item por nomes diferentes ("2 refri e uma
     coca"): são 3 refrigerantes, e a resposta deve dizer isso, em vez de
     listar o mesmo produto duas vezes."""
-    agrupados: dict[str, int] = {}
+    agrupados: dict[str, ItemPedido] = {}
     for item in itens:
-        agrupados[item.produto] = agrupados.get(item.produto, 0) + item.quantidade
-    return [ItemPedido(quantidade, produto) for produto, quantidade in agrupados.items()]
+        if item.produto in agrupados:
+            agrupados[item.produto].quantidade += item.quantidade
+            agrupados[item.produto].especial = item.especial or agrupados[item.produto].especial
+        else:
+            agrupados[item.produto] = ItemPedido(item.quantidade, item.produto, item.especial)
+    return list(agrupados.values())
 
 
 def _juntar(descricoes: list[str]) -> str:
@@ -166,24 +181,40 @@ def montar_ajuda() -> str:
     """Lista de comandos montada a partir do vocabulário real do lexer, para
     não divergir do que o programa aceita."""
     linhas = ["Comandos disponíveis:", ""]
+    # (ação, explicação, verbos em destaque, exemplo). Os verbos em destaque
+    # são os que um cliente realmente usa; a lista completa vive no lexer e
+    # cada um deles é conferido contra ela, para a ajuda nunca prometer um
+    # verbo que o programa não entende.
     descricoes = [
-        ("ADICIONAR", "<qtd> <produto>", "põe itens no pedido"),
-        ("REMOVER", "<qtd> <produto>", "tira itens do pedido"),
-        ("MOSTRAR", "", "mostra o pedido atual"),
-        ("CARDAPIO", "", "lista produtos e preços"),
-        ("FINALIZAR", "", "fecha a conta"),
-        ("CANCELAR", "", "esvazia o pedido"),
-        ("AJUDA", "", "esta lista"),
+        ("ADICIONAR", "põe itens no pedido", ["pedir", "quero", "adicione", "ve"],
+         "quero 2 hambúrgueres e 1 refri"),
+        ("REMOVER", "tira itens do pedido", ["remover", "remova", "tire", "retire"],
+         "remova 1 refri / tire todas as águas"),
+        ("MOSTRAR", "mostra o pedido atual", ["mostrar", "ver", "listar"],
+         "mostrar pedido"),
+        ("CARDAPIO", "lista produtos e preços", ["cardapio", "menu", "preco"],
+         "cardápio / quanto custa a pizza"),
+        ("FINALIZAR", "fecha a conta", ["finalizar", "fechar", "pagar"],
+         "fechar a conta"),
+        ("CANCELAR", "esvazia o pedido", ["cancelar", "limpar"],
+         "cancelar / limpar tudo"),
+        ("AJUDA", "esta lista", ["ajuda", "comandos"], "ajuda"),
     ]
-    for acao, argumento, explicacao in descricoes:
-        palavras = "/".join(_palavras_da_acao(acao))
-        uso = f"{palavras} {argumento}".strip()
-        linhas.append(f"  {uso:<46} {explicacao}")
+    for acao, explicacao, destaque, exemplo in descricoes:
+        conhecidos = set(_palavras_da_acao(acao))
+        verbos = [v for v in destaque if v in conhecidos]
+        restantes = len(conhecidos) - len(verbos)
+        resumo = "/".join(verbos) + (f" (+{restantes} formas)" if restantes else "")
+        linhas.append(f"  {explicacao}")
+        linhas.append(f"      verbos:  {resumo}")
+        linhas.append(f"      ex.:     {exemplo}")
 
     linhas.append("")
-    linhas.append("Dá para pedir vários itens de uma vez:")
-    linhas.append("  pedir 2 hambúrguer e 1 refrigerante")
-    linhas.append("A quantidade pode ser número ou por extenso (dois, três...).")
+    linhas.append("Também entendo:")
+    linhas.append("  - só os itens, sem verbo: '2 hambúrgueres e um suco'")
+    linhas.append("  - plural e quantidade por extenso: 'duas águas', 'três sucos'")
+    linhas.append("  - 'todas', 'metade' e 'um de cada': 'tire todas as águas', 'um de cada'")
+    linhas.append("  - negação: 'não vou querer o refri' = remover")
     return "\n".join(linhas)
 
 
@@ -329,6 +360,13 @@ def interpretar(tokens: list[Token], pedido: Pedido) -> str:
             return _juntar(precos) + "."
         return cardapio.listar()
 
+    # "tire tudo" / "remova tudo": REMOVER com "todas" e sem produto é o
+    # mesmo que esvaziar o pedido
+    if acao == "REMOVER" and not itens and any(
+        t.tipo == TipoToken.QUANTIDADE and t.valor == "todas" for t in tokens
+    ):
+        acao = "CANCELAR"
+
     if acao == "CANCELAR":
         if pedido.vazio():
             return "O pedido já está vazio."
@@ -411,7 +449,55 @@ def _quantidade_antes_de(tokens: list[Token], alvo: Token) -> int:
     return quantidade
 
 
+def _expandir(acao: str, itens: list[ItemPedido], pedido: Pedido) -> list[ItemPedido] | str:
+    """
+    Resolve o que só faz sentido diante do carrinho ou do cardápio:
+
+    - produto "*" ("um de cada"): ao pedir, vira um item por produto do
+      cardápio; ao remover, um item por produto que está no carrinho;
+    - "todas": ao remover, a quantidade que há no carrinho;
+    - "metade": ao remover, metade do que há (no mínimo 1).
+
+    Devolve a lista concreta, ou uma mensagem de erro quando a frase não tem
+    resolução ("adicionar todas as águas" — todas quantas?).
+    """
+    concretos: list[ItemPedido] = []
+
+    for item in itens:
+        if item.produto == "*":
+            if acao == "ADICIONAR":
+                alvos = [p.codigo for p in cardapio.PRODUTOS]
+            else:
+                alvos = list(pedido.itens)
+                if not alvos:
+                    return "Seu pedido está vazio, não há o que remover."
+            concretos.extend(ItemPedido(item.quantidade, alvo, item.especial) for alvo in alvos)
+        else:
+            concretos.append(item)
+
+    resolvidos: list[ItemPedido] = []
+    for item in concretos:
+        if item.especial is None:
+            resolvidos.append(item)
+            continue
+        if acao != "REMOVER":
+            return "Para pedir, diga a quantidade (ex.: '2 águas')."
+        no_carrinho = pedido.quantidade_de(item.produto)
+        if item.especial == "todas":
+            quantidade = no_carrinho or 1  # 0 -> 1, para cair no "você não tem"
+        else:  # metade
+            quantidade = max(1, no_carrinho // 2) if no_carrinho else 1
+        resolvidos.append(ItemPedido(quantidade, item.produto))
+
+    return _consolidar(resolvidos)
+
+
 def _executar(acao: str, itens: list[ItemPedido], pedido: Pedido) -> str:
+    expandidos = _expandir(acao, itens, pedido)
+    if isinstance(expandidos, str):
+        return expandidos
+    itens = expandidos
+
     invalidas = [item for item in itens if item.quantidade <= 0]
     if invalidas:
         return "Quantidade inválida: informe um número maior que zero."

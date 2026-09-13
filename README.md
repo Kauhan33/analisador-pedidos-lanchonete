@@ -117,6 +117,16 @@ O programa entende a frase como um cliente fala, não só como um comando:
 | `fecha a conta` | finalizar |
 | `quanto custa o hamburguer` | "Hambúrguer custa R$ 18.00." |
 | `eu vou querer 2 aguas` | pedir 2 águas (sem sobrar "não temos 'eu'") |
+| `remover todas as águas` | tira todas as unidades do item |
+| `tire metade dos refris` | tira metade do que há (mínimo 1) |
+| `adicione um de cada` | 1 de cada produto do cardápio |
+| `remova um de cada` | 1 de cada item que está no carrinho |
+| `tire tudo` | esvazia o pedido |
+| `quiero 2 refris`, `adissione uma pizza` | verbo transcrito errado, aceito por semelhança |
+
+"Todas", "metade" e "de cada" são o que a análise semântica chama de quantidade
+*simbólica*: o lexer as marca, mas o número só existe diante do carrinho (ou do cardápio),
+e é lá que ele é resolvido.
 
 ## Como executar
 
@@ -142,6 +152,15 @@ importam num balcão ao mesmo tempo: o **cardápio** com os preços, o **microfo
   microfone, clicar de novo desliga.
 - As **barras ao redor** mostram o volume real captado — cada barra é um instante do
   histórico recente, então o anel é a forma de onda do que o microfone ouviu.
+- **`+`** ao lado de cada item do cardápio adiciona uma unidade; **`−`** e **`×`** ao
+  lado de cada item do pedido tiram uma unidade ou o item inteiro; **Limpar pedido**
+  esvazia tudo.
+
+Os botões **não mexem no pedido diretamente**: cada clique gera o comando em texto que
+ele representa ("quero 1 pizza", "remova todas as pizzas", "cancelar pedido") e o manda
+pelo mesmo pipeline léxico/semântico da voz e do texto. É por isso que o clique aparece
+no histórico como `Cliente (botão): quero 1 pizza` — e por isso botão, texto e voz fazem
+exatamente a mesma coisa, com uma análise só.
 
 ## Voz
 
@@ -154,6 +173,9 @@ importam num balcão ao mesmo tempo: o **cardápio** com os preços, o **microfo
 
 Os verbos são reconhecidos pelo **radical** ("adicion-", "remov-", "retir-", "cancel-"),
 então qualquer conjugação serve: adicione, adicionar, adicionando, remova, removendo...
+E, como o reconhecimento de fala erra o verbo tanto quanto o produto, um verbo
+transcrito errado ("quiero", "adissione", "remuva") é aceito por **semelhança**
+(≥ 0,8, só para palavras de 4+ letras — as curtas casariam com qualquer coisa).
 
 A resposta em áudio tenta primeiro uma voz pt-BR instalada no sistema e, se não houver,
 usa o Google Text-to-Speech — assim sai em português mesmo em máquina sem voz instalada.
@@ -170,10 +192,10 @@ sem tkinter, o programa avisa e continua funcionando pelo teclado.
 python -m unittest discover -p "test_*.py" -v
 ```
 
-São 90 testes:
+São 109 testes:
 
 | Arquivo | Cobre |
 |---|---|
 | `test_lanchonete.py` | lexer, associação de quantidades, validações, consultas e cardápio |
-| `test_linguagem_natural.py` | plural, pedido sem verbo, conjugações, negação, sugestões com "sim"/"não", sessão real de uso |
-| `test_voz_e_interface.py` | filtro de voz por verbo, síntese e a janela |
+| `test_linguagem_natural.py` | plural, pedido sem verbo, conjugações, negação, sugestões com "sim"/"não", quantidades simbólicas, verbos por semelhança, sessões reais de uso |
+| `test_voz_e_interface.py` | filtro de voz por verbo, síntese, a janela e os botões |
