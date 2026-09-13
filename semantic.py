@@ -209,22 +209,39 @@ def interpretar(tokens: list[Token], pedido: Pedido) -> str:
     """Fase de análise semântica: valida o significado do pedido e executa
     a ação correspondente sobre o carrinho."""
 
-    acoes = [t for t in tokens if t.tipo == TipoToken.ACAO]
     desconhecidos = [t for t in tokens if t.tipo == TipoToken.DESCONHECIDO]
+    itens = associar_itens(tokens)
 
-    if not acoes:
-        if desconhecidos:
-            return _resposta_para_desconhecidos(desconhecidos)
-        return "Não entendi o que você quer fazer. Diga 'ajuda' para ver os comandos."
-    if len(acoes) > 1:
+    # "quero pedir 2 pizzas" tem dois verbos, mas os dois querem dizer
+    # ADICIONAR — só é conflito quando as ações são diferentes entre si
+    acoes_distintas = list(dict.fromkeys(t.valor for t in tokens if t.tipo == TipoToken.ACAO))
+
+    if len(acoes_distintas) > 1:
         return "Entendi mais de um comando na mesma frase. Faça um de cada vez."
 
-    acao = acoes[0].valor
+    if acoes_distintas:
+        acao = acoes_distintas[0]
+    elif itens:
+        # só os itens, sem verbo ("2 hambúrgueres e um suco"): num balcão,
+        # isso é um pedido — ADICIONAR é a ação implícita
+        acao = "ADICIONAR"
+    elif desconhecidos:
+        return _resposta_para_desconhecidos(desconhecidos)
+    else:
+        return "Não entendi o que você quer fazer. Diga 'ajuda' para ver os comandos."
 
     if acao == "AJUDA":
         return montar_ajuda()
 
     if acao == "CARDAPIO":
+        # com produto na frase ("quanto custa o hambúrguer"), responde só o
+        # preço dele; sem produto, mostra o cardápio inteiro
+        if itens:
+            precos = [
+                f"{nome_exibicao(item.produto)} custa R$ {preco(item.produto):.2f}"
+                for item in itens
+            ]
+            return _juntar(precos) + "."
         return cardapio.listar()
 
     if acao == "CANCELAR":
@@ -243,7 +260,6 @@ def interpretar(tokens: list[Token], pedido: Pedido) -> str:
         pedido.itens.clear()
         return resposta
 
-    itens = associar_itens(tokens)
     if not itens:
         if desconhecidos:
             return _resposta_para_desconhecidos(desconhecidos)

@@ -20,8 +20,10 @@ from semantic import Pedido, interpretar
 
 COMANDOS_DEMO = [
     "Pedir Hamburguer",
-    "Pedir 2 Refrigerante",
+    "2 hamburguers e dois refrigerantes",    # sem verbo, no plural
     "quero tres batata frita e dois suco",   # vários itens na mesma frase
+    "me vê um x-burguer",                    # coloquial, com hífen
+    "quanto custa a pizza",                  # consulta de preço
     "Remover Refrigerante",
     "remover 5 hamburguer",                  # mais do que existe no pedido
     "Remover suco",                          # ainda há suco: sai normalmente

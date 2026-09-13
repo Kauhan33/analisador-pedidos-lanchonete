@@ -14,7 +14,8 @@ análise léxica e validando o pedido por análise semântica — ver
 1. **Análise léxica** ([lexer.py](lexer.py)): quebra a frase em `Token`s classificados
    em `ACAO`, `PRODUTO`, `QUANTIDADE`, `CONECTIVO` (artigos, preposições) ou
    `DESCONHECIDO`. Reconhece produtos escritos com mais de uma palavra ("batata frita",
-   "cachorro quente") e apelidos ("refri", "hot dog", "fritas").
+   "cachorro quente"), apelidos ("refri", "hot dog", "fritas") e **plurais por regra**
+   ("hamburguers", "batatas fritas") — desfaz o sufixo em vez de listar cada forma.
 2. **Análise semântica** ([semantic.py](semantic.py)): descobre a qual produto cada
    quantidade se refere, valida o pedido diante do **estado atual** do carrinho e
    calcula os totais.
@@ -76,6 +77,17 @@ A quantidade pode ser número (`2`) ou por extenso (`dois`), e vários itens cab
 mesma frase. Dentro do programa, `ajuda` imprime a lista completa — montada a partir do
 vocabulário real do lexer, então ela nunca fica desatualizada.
 
+O programa entende a frase como um cliente fala, não só como um comando:
+
+| Frase | Entendido como |
+|---|---|
+| `2 hamburguers e dois refrigerantes` | pedir (sem verbo, o pedido é implícito) |
+| `quero pedir 2 pizzas` | pedir (dois verbos da mesma ação não é conflito) |
+| `me vê um x-burguer` | pedir 1 hambúrguer |
+| `fecha a conta` | finalizar |
+| `quanto custa o hamburguer` | "Hambúrguer custa R$ 18.00." |
+| `eu vou querer 2 aguas` | pedir 2 águas (sem sobrar "não temos 'eu'") |
+
 ## Como executar
 
 ```bash
@@ -126,9 +138,10 @@ sem tkinter, o programa avisa e continua funcionando pelo teclado.
 python -m unittest discover -p "test_*.py" -v
 ```
 
-São 63 testes:
+São 79 testes:
 
 | Arquivo | Cobre |
 |---|---|
 | `test_lanchonete.py` | lexer, associação de quantidades, validações, consultas e cardápio |
+| `test_linguagem_natural.py` | plural, pedido sem verbo, conjugações, coloquialismos, preço por item |
 | `test_voz_e_interface.py` | palavra-chave, síntese de voz e a janela |
