@@ -114,6 +114,28 @@ class TestAdicionar(unittest.TestCase):
         self.assertIn("alta demais", self._dizer("pedir 500 hamburguer"))
         self.assertTrue(self.pedido.vazio())
 
+    def test_limite_vale_para_o_total_no_carrinho(self):
+        """Regressão: "99 sucos" e depois "mais 1" chegava a 100 — o limite
+        só olhava o número da frase."""
+        self._dizer("99 sucos")
+        resposta = self._dizer("quero 1 suco")
+        self.assertIn("alta demais", resposta)
+        self.assertIn("você já tem 99", resposta)
+        self.assertEqual(self.pedido.itens, {"suco": 99})
+
+    def test_remover_nunca_esbarra_no_limite(self):
+        """Regressão: o botão "×" gerava "remova todas as suco" e, com 100 no
+        carrinho, a remoção era recusada por "quantidade alta demais"."""
+        self.pedido.itens = {"suco": 100}
+        resposta = self._dizer("remova todas as suco")
+        self.assertIn("Removido 100x Suco", resposta)
+        self.assertTrue(self.pedido.vazio())
+
+    def test_remover_mais_de_99_com_numero_tambem_funciona(self):
+        self.pedido.itens = {"suco": 150}
+        self._dizer("remova 120 sucos")
+        self.assertEqual(self.pedido.itens, {"suco": 30})
+
 
 class TestRemover(unittest.TestCase):
     def setUp(self) -> None:

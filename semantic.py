@@ -502,9 +502,20 @@ def _executar(acao: str, itens: list[ItemPedido], pedido: Pedido) -> str:
     if invalidas:
         return "Quantidade inválida: informe um número maior que zero."
 
-    excessivas = [item for item in itens if item.quantidade > QUANTIDADE_MAXIMA]
-    if excessivas:
-        return f"Quantidade alta demais: o máximo por item é {QUANTIDADE_MAXIMA}."
+    # O limite vale para o que o carrinho vai ficar TENDO ao pedir, e não
+    # para o número dito na frase — senão "99 sucos" seguido de "mais 1"
+    # passa. E vale só ao pedir: remover nunca excede o que existe, então
+    # "remova todas" de um item com 100 unidades tem que funcionar.
+    if acao == "ADICIONAR":
+        for item in itens:
+            resultante = pedido.quantidade_de(item.produto) + item.quantidade
+            if resultante > QUANTIDADE_MAXIMA:
+                atual = pedido.quantidade_de(item.produto)
+                detalhe = f" (você já tem {atual})" if atual else ""
+                return (
+                    f"Quantidade alta demais para {nome_exibicao(item.produto)}: "
+                    f"o máximo por item é {QUANTIDADE_MAXIMA}{detalhe}."
+                )
 
     if acao == "ADICIONAR":
         return _adicionar(itens, pedido)
