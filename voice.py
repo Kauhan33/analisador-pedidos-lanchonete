@@ -363,7 +363,7 @@ def diagnosticar() -> str:
     """Relatório do que está disponível nesta máquina para voz — útil para
     checar o ambiente antes de testar (e para entender, sem adivinhação,
     por que a voz pode não estar funcionando em um computador específico)."""
-    linhas = ["Diagnóstico de voz do Mini-Alexa", "-" * 34]
+    linhas = ["Diagnóstico de voz da Lanchonete", "-" * 34]
 
     linhas.append(
         f"Reconhecimento de fala (SpeechRecognition): {'OK' if STT_DISPONIVEL else 'NÃO INSTALADO'}"

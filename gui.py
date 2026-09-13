@@ -64,6 +64,11 @@ ARCO_SEGMENTOS = 40
 
 TEXTO_AJUDA_ENTRADA = "digite um pedido (ex.: 2 hambúrguer e 1 refrigerante)"
 
+# As duas colunas laterais (cardápio e pedido) têm a MESMA largura fixa. É
+# o que mantém a coluna do meio — e o círculo do microfone — exatamente no
+# centro da janela, alinhado com o título, em qualquer tamanho de tela.
+LARGURA_LATERAL = 300
+
 
 class JanelaLanchonete:
     """Janela principal. Toda manipulação de widget acontece na thread do
@@ -104,7 +109,7 @@ class JanelaLanchonete:
         self.fonte_titulo = tkfont.Font(family="Segoe UI", size=15, weight="bold")
         self.fonte_normal = tkfont.Font(family="Segoe UI", size=10)
         self.fonte_mono = tkfont.Font(family="Consolas", size=10)
-        self.fonte_secao = tkfont.Font(family="Segoe UI", size=11, weight="bold")
+        self.fonte_secao = tkfont.Font(family="Segoe UI", size=13, weight="bold")
 
         tk.Label(
             self.raiz, text="Lanchonete — Analisador de Pedidos",
@@ -127,7 +132,8 @@ class JanelaLanchonete:
         self._atualizar_visual_do_circulo()
 
     def _montar_cardapio(self, pai: tk.Frame) -> None:
-        coluna = tk.Frame(pai, bg=COR_PAINEL)
+        coluna = tk.Frame(pai, bg=COR_PAINEL, width=LARGURA_LATERAL)
+        coluna.pack_propagate(False)
         coluna.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 10))
 
         tk.Label(
@@ -210,7 +216,8 @@ class JanelaLanchonete:
         )
 
     def _montar_pedido(self, pai: tk.Frame) -> None:
-        coluna = tk.Frame(pai, bg=COR_PAINEL)
+        coluna = tk.Frame(pai, bg=COR_PAINEL, width=LARGURA_LATERAL)
+        coluna.pack_propagate(False)
         coluna.pack(side=tk.LEFT, fill=tk.BOTH, padx=(10, 0))
 
         tk.Label(
@@ -219,9 +226,8 @@ class JanelaLanchonete:
 
         # as linhas do pedido são widgets recriados a cada mudança (ver
         # _atualizar_pedido); este frame é só o contêiner delas
-        self.lista_pedido = tk.Frame(coluna, bg=COR_PAINEL, width=290)
+        self.lista_pedido = tk.Frame(coluna, bg=COR_PAINEL)
         self.lista_pedido.pack(fill=tk.BOTH, expand=True, padx=12)
-        self.lista_pedido.pack_propagate(False)
 
         rodape = tk.Frame(coluna, bg=COR_PAINEL)
         rodape.pack(fill=tk.X, padx=14, pady=(4, 12))
@@ -613,7 +619,33 @@ class JanelaLanchonete:
         self.raiz.mainloop()
 
 
+def mostrar_diagnostico() -> None:
+    """`Lanchonete.exe --diagnostico` (ou `python gui.py --diagnostico`):
+    mostra o que esta máquina tem para voz. No .exe não há console, então o
+    relatório vai para uma caixa de diálogo e para um arquivo ao lado."""
+    from tkinter import messagebox
+
+    from voice import diagnosticar
+
+    relatorio = diagnosticar()
+    try:
+        with open("diagnostico_voz.txt", "w", encoding="utf-8") as arquivo:
+            arquivo.write(relatorio + "\n")
+        relatorio += "\n\n(salvo em diagnostico_voz.txt)"
+    except OSError:
+        pass
+    raiz = tk.Tk()
+    raiz.withdraw()
+    messagebox.showinfo("Diagnóstico de voz", relatorio)
+    raiz.destroy()
+
+
 def main() -> None:
+    import sys
+
+    if "--diagnostico" in sys.argv:
+        mostrar_diagnostico()
+        return
     JanelaLanchonete().executar()
 
 

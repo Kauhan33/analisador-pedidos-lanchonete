@@ -186,6 +186,25 @@ Sim. O núcleo do exercício (análise léxica + semântica + cardápio) usa **a
 biblioteca padrão do Python**. Sem microfone, sem as bibliotecas de voz, sem internet ou
 sem tkinter, o programa avisa e continua funcionando pelo teclado.
 
+## Executável (Windows)
+
+Cada [release](../../releases) traz um **`Lanchonete.exe`** — um arquivo só, sem precisar de
+Python nem de `pip install`. É a interface gráfica, com voz incluída. Basta baixar e
+abrir (na primeira execução demora alguns segundos: o Windows descompacta o conteúdo).
+
+`Lanchonete.exe --diagnostico` mostra o que a máquina tem disponível para voz (microfone,
+vozes instaladas, motor online) — útil para checar o ambiente antes de testar.
+
+Para gerar o executável a partir do código:
+
+```bash
+pip install -r requirements.txt pyinstaller
+python build_exe.py        # resultado em dist/Lanchonete.exe
+```
+
+O Windows Defender às vezes marca executáveis gerados pelo PyInstaller como suspeitos
+(falso positivo comum); se acontecer, "Mais informações → Executar assim mesmo".
+
 ## Testes
 
 ```bash

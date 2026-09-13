@@ -3,3 +3,9 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# gerados pelo build_exe.py
+build/
+dist/
+*.spec
+diagnostico_voz.txt
