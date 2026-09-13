@@ -23,7 +23,7 @@ import cardapio
 from cardapio import nome_exibicao, preco
 from lexer import ACOES, Token, TipoToken, candidatos_singular
 
-QUANTIDADE_MAXIMA = 99
+QUANTIDADE_MAXIMA = 999
 
 # Similaridade a partir da qual um erro de digitação é corrigido sozinho,
 # com aviso ("amburguers" -> Hambúrguer). Abaixo disso, até o limiar do

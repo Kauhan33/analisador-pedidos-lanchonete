@@ -7,7 +7,7 @@ import unittest
 
 import cardapio
 from lexer import TipoToken, analisar_lexico
-from semantic import Pedido, associar_itens, interpretar, montar_ajuda
+from semantic import QUANTIDADE_MAXIMA, Pedido, associar_itens, interpretar, montar_ajuda
 
 
 class TestLexer(unittest.TestCase):
@@ -111,29 +111,35 @@ class TestAdicionar(unittest.TestCase):
         self.assertTrue(self.pedido.vazio())
 
     def test_quantidade_absurda_e_recusada(self):
-        self.assertIn("alta demais", self._dizer("pedir 500 hamburguer"))
+        self.assertIn("alta demais", self._dizer(f"pedir {QUANTIDADE_MAXIMA + 1} hamburguer"))
         self.assertTrue(self.pedido.vazio())
+
+    def test_no_limite_exato_e_aceito(self):
+        self._dizer(f"pedir {QUANTIDADE_MAXIMA} hamburguer")
+        self.assertEqual(self.pedido.itens, {"hamburguer": QUANTIDADE_MAXIMA})
 
     def test_limite_vale_para_o_total_no_carrinho(self):
-        """Regressão: "99 sucos" e depois "mais 1" chegava a 100 — o limite
-        só olhava o número da frase."""
-        self._dizer("99 sucos")
+        """Regressão: encher até o limite e depois pedir "mais 1" passava —
+        o limite só olhava o número da frase."""
+        self._dizer(f"{QUANTIDADE_MAXIMA} sucos")
         resposta = self._dizer("quero 1 suco")
         self.assertIn("alta demais", resposta)
-        self.assertIn("você já tem 99", resposta)
-        self.assertEqual(self.pedido.itens, {"suco": 99})
+        self.assertIn(f"você já tem {QUANTIDADE_MAXIMA}", resposta)
+        self.assertEqual(self.pedido.itens, {"suco": QUANTIDADE_MAXIMA})
 
     def test_remover_nunca_esbarra_no_limite(self):
-        """Regressão: o botão "×" gerava "remova todas as suco" e, com 100 no
-        carrinho, a remoção era recusada por "quantidade alta demais"."""
-        self.pedido.itens = {"suco": 100}
+        """Regressão: o botão "×" gerava "remova todas as suco" e, com o
+        carrinho acima do limite, a remoção era recusada por "quantidade
+        alta demais"."""
+        acima = QUANTIDADE_MAXIMA + 1
+        self.pedido.itens = {"suco": acima}
         resposta = self._dizer("remova todas as suco")
-        self.assertIn("Removido 100x Suco", resposta)
+        self.assertIn(f"Removido {acima}x Suco", resposta)
         self.assertTrue(self.pedido.vazio())
 
-    def test_remover_mais_de_99_com_numero_tambem_funciona(self):
-        self.pedido.itens = {"suco": 150}
-        self._dizer("remova 120 sucos")
+    def test_remover_acima_do_limite_com_numero_tambem_funciona(self):
+        self.pedido.itens = {"suco": QUANTIDADE_MAXIMA + 51}
+        self._dizer(f"remova {QUANTIDADE_MAXIMA + 21} sucos")
         self.assertEqual(self.pedido.itens, {"suco": 30})
 
 

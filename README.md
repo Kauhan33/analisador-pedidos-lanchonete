@@ -192,7 +192,7 @@ sem tkinter, o programa avisa e continua funcionando pelo teclado.
 python -m unittest discover -p "test_*.py" -v
 ```
 
-São 112 testes:
+São 113 testes:
 
 | Arquivo | Cobre |
 |---|---|
