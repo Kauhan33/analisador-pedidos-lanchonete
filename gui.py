@@ -122,7 +122,15 @@ class JanelaLanchonete:
         self.rotulo_status.pack(pady=(2, 6))
 
         corpo = tk.Frame(self.raiz, bg=COR_FUNDO)
-        corpo.pack(fill=tk.BOTH, expand=True, padx=14)
+        corpo.pack(fill=tk.X, padx=14)
+        # grid em vez de pack: as laterais ganham largura MÍNIMA igual (o que
+        # centraliza o meio), mas a altura continua vindo do conteúdo — com
+        # pack_propagate(False) a altura pedida virava zero e o histórico
+        # subia por cima dos últimos itens do cardápio.
+        corpo.columnconfigure(0, minsize=LARGURA_LATERAL, weight=0, uniform="lateral")
+        corpo.columnconfigure(1, weight=1)
+        corpo.columnconfigure(2, minsize=LARGURA_LATERAL, weight=0, uniform="lateral")
+        corpo.rowconfigure(0, weight=1)
 
         self._montar_cardapio(corpo)
         self._montar_microfone(corpo)
@@ -132,9 +140,8 @@ class JanelaLanchonete:
         self._atualizar_visual_do_circulo()
 
     def _montar_cardapio(self, pai: tk.Frame) -> None:
-        coluna = tk.Frame(pai, bg=COR_PAINEL, width=LARGURA_LATERAL)
-        coluna.pack_propagate(False)
-        coluna.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 10))
+        coluna = tk.Frame(pai, bg=COR_PAINEL)
+        coluna.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
         tk.Label(
             coluna, text="Cardápio", bg=COR_PAINEL, fg=COR_DESTAQUE, font=self.fonte_secao
@@ -169,7 +176,7 @@ class JanelaLanchonete:
 
     def _montar_microfone(self, pai: tk.Frame) -> None:
         coluna = tk.Frame(pai, bg=COR_FUNDO)
-        coluna.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        coluna.grid(row=0, column=1, sticky="nsew")
 
         self.canvas = tk.Canvas(
             coluna, width=300, height=240, bg=COR_FUNDO, highlightthickness=0
@@ -216,9 +223,8 @@ class JanelaLanchonete:
         )
 
     def _montar_pedido(self, pai: tk.Frame) -> None:
-        coluna = tk.Frame(pai, bg=COR_PAINEL, width=LARGURA_LATERAL)
-        coluna.pack_propagate(False)
-        coluna.pack(side=tk.LEFT, fill=tk.BOTH, padx=(10, 0))
+        coluna = tk.Frame(pai, bg=COR_PAINEL)
+        coluna.grid(row=0, column=2, sticky="nsew", padx=(10, 0))
 
         tk.Label(
             coluna, text="Pedido atual", bg=COR_PAINEL, fg=COR_DESTAQUE, font=self.fonte_secao
