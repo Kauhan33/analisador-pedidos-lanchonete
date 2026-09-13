@@ -17,10 +17,12 @@ A tela mostra, ao mesmo tempo, as três coisas que importam num balcão:
 A análise dos pedidos é exatamente a mesma do modo terminal: esta janela só
 troca a forma de entrar com a frase e de mostrar a resposta.
 
-Regras de interação (iguais às do terminal):
-- falando, o pedido precisa começar com a palavra-chave "Atendente", e a
+Regras de interação:
+- falando, só frases com um verbo de pedido contam ("quero...", "me vê...",
+  "adicione...", "remova...") — com o microfone aberto num balcão, quase tudo
+  captado é conversa, e o verbo é o que separa pedido de conversa. A
   resposta sai em áudio;
-- digitando, não precisa de palavra-chave e a resposta sai só na tela;
+- digitando, basta os itens ("2 hambúrgueres") e a resposta sai só na tela;
 - "sair" encerra o programa, falado ou digitado.
 """
 
@@ -33,11 +35,10 @@ import tkinter as tk
 from tkinter import font as tkfont
 
 import cardapio
-from lexer import analisar_lexico
+from lexer import analisar_lexico, tem_comando_explicito
 from semantic import Pedido, interpretar, texto_para_audio
 from visual import AnimacaoCircular, MedidorDeNivel, gerar_disco_ppm, misturar_cores
 from voice import STT_DISPONIVEL, ErroReconhecimento, OuvidorContinuo, falar
-from wakeword import extrair_comando
 
 COMANDOS_SAIR = ("sair", "exit", "quit")
 
@@ -278,7 +279,7 @@ class JanelaLanchonete:
     def _mostrar_boas_vindas(self) -> None:
         self._escrever(
             "Digite o pedido (ex.: 2 hambúrguer e 1 refrigerante) ou clique no círculo "
-            'para falar. Falando, comece com "Atendente".',
+            'para falar. Falando, use um verbo: "quero...", "me vê...", "remova...".',
             "aviso",
         )
         if not STT_DISPONIVEL:
@@ -332,7 +333,7 @@ class JanelaLanchonete:
             self.item_texto_circulo, text="ouvindo" if ouvindo else "clique\npara falar"
         )
         if ouvindo:
-            self.rotulo_status.config(text='Microfone ligado — comece o pedido com "Atendente"')
+            self.rotulo_status.config(text='Microfone ligado — fale com um verbo: "quero dois sucos"')
         elif STT_DISPONIVEL:
             self.rotulo_status.config(text="Microfone desligado — clique no círculo para falar")
         else:
@@ -436,7 +437,9 @@ class JanelaLanchonete:
                 if "Ninguém falou" in mensagem:
                     continue
                 if "não consegui entender" in mensagem.lower():
-                    self.eventos.put(("aviso", "(não entendi o que foi falado — pode repetir)"))
+                    # ruído de fundo gera isso em sequência; a interface
+                    # colapsa repetições (ver _escrever_sem_repetir)
+                    self.eventos.put(("ruido", "(não entendi o que foi falado — pode repetir)"))
                     continue
                 self.eventos.put(("aviso", mensagem))
                 continue
@@ -444,23 +447,20 @@ class JanelaLanchonete:
             if not self.escutando.is_set():
                 break
 
-            comando = extrair_comando(frase)
-            if comando is None:
+            if frase.strip().lower() in COMANDOS_SAIR:
+                self.eventos.put(("sair", ""))
+                return
+
+            # Com o microfone aberto, só vira pedido o que tem um verbo de
+            # comando ("quero", "me vê", "remova"...). O resto é conversa.
+            tokens = analisar_lexico(frase)
+            if not tem_comando_explicito(tokens):
                 self.eventos.put(("ignorado", frase))
                 continue
 
             self.eventos.put(("voz", frase))
-
-            if not comando:
-                self.eventos.put(("resposta_falada", "Diga o pedido depois de 'Atendente'."))
-                continue
-
-            if comando.lower() in COMANDOS_SAIR:
-                self.eventos.put(("sair", ""))
-                return
-
             with self._trava_pedido:
-                resposta = self._processar(comando)
+                resposta = interpretar(tokens, self.pedido)
             self.eventos.put(("resposta_falada", resposta))
 
     def _processar(self, frase: str) -> str:
@@ -481,11 +481,12 @@ class JanelaLanchonete:
                     self._escrever(f"Cliente (voz): {conteudo}", "cliente")
                 elif tipo == "ignorado":
                     self._escrever(
-                        f"Cliente (voz): {conteudo}  (ignorado: sem a palavra-chave 'Atendente')",
-                        "aviso",
+                        f"Cliente (voz): {conteudo}  (ignorado: sem verbo de pedido)", "aviso"
                     )
                 elif tipo == "aviso":
                     self._escrever(conteudo, "aviso")
+                elif tipo == "ruido":
+                    self._escrever_sem_repetir(conteudo, "aviso")
                 elif tipo == "resposta_falada":
                     self._escrever(f"Sistema: {conteudo}", "sistema")
                     self._atualizar_pedido()
@@ -511,6 +512,14 @@ class JanelaLanchonete:
         self.conversa.insert(tk.END, texto + "\n", estilo)
         self.conversa.see(tk.END)
         self.conversa.configure(state=tk.DISABLED)
+        self._ultima_linha = texto
+
+    def _escrever_sem_repetir(self, texto: str, estilo: str) -> None:
+        """Escreve só se a linha anterior não for igual — evita o histórico
+        encher de "(não entendi...)" quando o microfone capta ruído
+        contínuo."""
+        if getattr(self, "_ultima_linha", None) != texto:
+            self._escrever(texto, estilo)
 
     # ------------------------------------------------------------------
     # Encerramento

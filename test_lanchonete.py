@@ -159,9 +159,17 @@ class TestSugestoes(unittest.TestCase):
     def _dizer(self, frase: str) -> str:
         return interpretar(analisar_lexico(frase), self.pedido)
 
-    def test_erro_de_digitacao_gera_sugestao(self):
+    def test_erro_de_digitacao_pequeno_e_corrigido_sozinho(self):
+        """"hamburgue" é parecido demais com "hamburguer" para valer uma
+        pergunta: corrige e avisa."""
         resposta = self._dizer("pedir hamburgue")
-        self.assertIn("você quis dizer Hambúrguer?", resposta)
+        self.assertEqual(self.pedido.itens, {"hamburguer": 1})
+        self.assertIn("entendi 'hamburgue' como Hambúrguer", resposta)
+
+    def test_erro_de_digitacao_maior_vira_pergunta(self):
+        resposta = self._dizer("pedir sucus")
+        self.assertIn("você quis dizer Suco?", resposta)
+        self.assertTrue(self.pedido.vazio())
 
     def test_produto_realmente_inexistente_nao_inventa_sugestao(self):
         resposta = self._dizer("pedir lasanha")

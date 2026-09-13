@@ -117,6 +117,107 @@ class TestFrasesDeBalcao(unittest.TestCase):
                 self.assertEqual(pedido.itens, {"suco": 1})
 
 
+class TestSessaoRealDeUso(unittest.TestCase):
+    """Reproduz uma sessão real que expôs vários problemas de uma vez. Cada
+    caso abaixo era uma linha errada daquele log."""
+
+    def setUp(self) -> None:
+        self.pedido = Pedido()
+
+    def _dizer(self, frase: str) -> str:
+        return interpretar(analisar_lexico(frase), self.pedido)
+
+    def test_conjugacao_no_imperativo_formal(self):
+        """"adicione" e "remova" não estavam listados; agora entram pelo
+        radical do verbo, como qualquer outra conjugação."""
+        resposta = self._dizer("adicione dois hamburguers")
+        self.assertEqual(self.pedido.itens, {"hamburguer": 2})
+        self.assertNotIn("Não temos 'adicione'", resposta)
+
+    def test_remova_remove_e_nao_adiciona(self):
+        """O bug mais grave do log: "remova 99 refris" ADICIONAVA 99, porque
+        o verbo desconhecido deixava a frase só com itens, e a ação implícita
+        (pedir) entrava no lugar."""
+        self._dizer("quero 3 refris")
+        resposta = self._dizer("remova 2 refris")
+        self.assertIn("Removido 2x Refrigerante", resposta)
+        self.assertEqual(self.pedido.itens, {"refrigerante": 1})
+
+    def test_outras_formas_de_remover(self):
+        for frase in ("retire um refri", "tire um refri", "apague o refri", "exclua um refri"):
+            with self.subTest(frase=frase):
+                self.pedido.itens = {"refrigerante": 2}
+                self._dizer(frase)
+                self.assertEqual(self.pedido.itens, {"refrigerante": 1})
+
+    def test_negacao_de_pedir_e_remover(self):
+        """"Não vou querer o hambúrguer" / "não quero mais o refri" são
+        NEGAR + ADICIONAR — ou seja, remover."""
+        self.pedido.itens = {"hamburguer": 1, "refrigerante": 1}
+        self._dizer("nao vou querer o hamburguer")
+        self._dizer("não quero mais o refri")
+        self.assertTrue(self.pedido.vazio())
+
+    def test_verbo_desconhecido_nao_vira_pedido(self):
+        """Uma palavra estranha na posição do verbo não pode ser tratada como
+        "pedir": é exatamente o que fez "remova" adicionar."""
+        resposta = self._dizer("xablau 2 refris")
+        self.assertIn("Não conheço o comando 'xablau'", resposta)
+        self.assertTrue(self.pedido.vazio())
+
+    def test_erro_de_digitacao_grande_e_corrigido_sozinho(self):
+        resposta = self._dizer("2 amburguers")
+        self.assertEqual(self.pedido.itens, {"hamburguer": 2})
+        self.assertIn("entendi 'amburguers' como Hambúrguer", resposta)
+
+    def test_sugestao_confirmada_com_sim(self):
+        """No log, "sim" depois de uma sugestão virou "não temos 'sim'"."""
+        resposta = self._dizer("quero 3 sucus")
+        self.assertIn("você quis dizer Suco?", resposta)
+        self.assertTrue(self.pedido.vazio())
+
+        self._dizer("sim")
+        self.assertEqual(self.pedido.itens, {"suco": 3})
+
+    def test_sugestao_negada_com_nao(self):
+        self._dizer("quero 3 sucus")
+        self.assertIn("deixa pra lá", self._dizer("nao"))
+        self.assertTrue(self.pedido.vazio())
+
+    def test_sugestao_e_descartada_por_qualquer_outra_frase(self):
+        self._dizer("quero 3 sucus")
+        self._dizer("quero um refri")
+        self.assertIn("nada para confirmar", self._dizer("sim"))
+        self.assertEqual(self.pedido.itens, {"refrigerante": 1})
+
+    def test_sim_sem_sugestao_pendente(self):
+        self.assertIn("nada para confirmar", self._dizer("sim"))
+
+    def test_conversa_nao_e_tratada_como_produto(self):
+        """"aí é foda" respondia "não temos 'foda' no cardápio", como se o
+        cliente tivesse pedido isso."""
+        resposta = self._dizer("aí é foda")
+        self.assertNotIn("Não temos", resposta)
+        self.assertIn("Não entendi", resposta)
+
+    def test_so_pontuacao_nao_vira_palavra_vazia(self):
+        """"???????" respondia "não temos '' no cardápio"."""
+        resposta = self._dizer("???????")
+        self.assertNotIn("''", resposta)
+        self.assertIn("Não entendi", resposta)
+
+    def test_palavra_depois_de_quantidade_e_produto_recusado(self):
+        """Mas "2 lasanhas" está na forma de um pedido: aí vale dizer que não
+        tem."""
+        self.assertIn("Não temos 'lasanhas'", self._dizer("2 lasanhas"))
+
+    def test_sobra_de_palavra_nao_e_recusa_de_produto(self):
+        resposta = self._dizer("2 refris pra viagem")
+        self.assertEqual(self.pedido.itens, {"refrigerante": 2})
+        self.assertIn("não reconheci 'viagem'", resposta)
+        self.assertNotIn("Não temos", resposta)
+
+
 class TestConsultaDePreco(unittest.TestCase):
     def test_preco_de_um_produto(self):
         for frase in ("quanto custa o hamburguer", "qual o valor da pizza", "preco do suco"):

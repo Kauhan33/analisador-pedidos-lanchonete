@@ -17,12 +17,18 @@ sozinha não consegue: entender o *significado* da sequência.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 import cardapio
 from cardapio import nome_exibicao, preco
-from lexer import ACOES, Token, TipoToken
+from lexer import ACOES, Token, TipoToken, candidatos_singular
 
 QUANTIDADE_MAXIMA = 99
+
+# Similaridade a partir da qual um erro de digitação é corrigido sozinho,
+# com aviso ("amburguers" -> Hambúrguer). Abaixo disso, até o limiar do
+# cardápio, vira pergunta: "você quis dizer X?", que "sim" confirma.
+LIMIAR_AUTOCORRECAO = 0.85
 
 
 @dataclass
@@ -40,8 +46,19 @@ class ItemPedido:
 
 
 @dataclass
+class Pendencia:
+    """Uma sugestão que ficou esperando "sim" ou "não" do cliente."""
+
+    acao: str
+    itens: list[ItemPedido]
+
+
+@dataclass
 class Pedido:
     itens: dict[str, int] = field(default_factory=dict)
+    # sugestão aguardando confirmação (ver interpretar); qualquer outra frase
+    # do cliente a descarta
+    pendencia: Pendencia | None = None
 
     def adicionar(self, produto: str, quantidade: int) -> None:
         self.itens[produto] = self.itens.get(produto, 0) + quantidade
@@ -192,17 +209,65 @@ def texto_para_audio(resposta: str) -> str:
 # --------------------------------------------------------------------------
 
 
+def _melhor_sugestao(palavra: str) -> tuple[str | None, float]:
+    """Produto mais parecido com `palavra` (tentando também o singular dela)
+    e a nota dessa semelhança."""
+    melhor, melhor_nota = None, 0.0
+    for forma in candidatos_singular(palavra):
+        for produto in cardapio.PRODUTOS:
+            for sinonimo in produto.sinonimos:
+                nota = SequenceMatcher(None, forma, sinonimo).ratio()
+                if nota > melhor_nota:
+                    melhor, melhor_nota = produto.codigo, nota
+    if melhor_nota < cardapio.LIMIAR_SUGESTAO:
+        return None, melhor_nota
+    return melhor, melhor_nota
+
+
 def _resposta_para_desconhecidos(desconhecidos: list[Token]) -> str:
-    """Monta a recusa de palavras fora do cardápio, sugerindo o produto
-    parecido quando existe algum."""
+    """Recusa de palavras fora do cardápio, sugerindo o produto parecido
+    quando existe algum."""
     partes = []
     for token in desconhecidos:
-        sugestao = cardapio.sugerir(token.lexema)
+        sugestao, _ = _melhor_sugestao(token.lexema)
         if sugestao:
             partes.append(f"'{token.lexema}' (você quis dizer {nome_exibicao(sugestao)}?)")
         else:
             partes.append(f"'{token.lexema}'")
     return f"Não temos {_juntar(partes)} no cardápio."
+
+
+def _acao_da_frase(tokens: list[Token]) -> str | None:
+    """
+    Decide a ação da frase a partir dos verbos, aplicando a negação.
+
+    "Não vou querer o refri" tem NEGAR + ADICIONAR — e quer dizer REMOVER.
+    A negação inverte o verbo de pedir; sobre os outros ("não cancela") não
+    há inversão útil, então ela é só ignorada.
+    """
+    acoes = list(dict.fromkeys(t.valor for t in tokens if t.tipo == TipoToken.ACAO))
+    negado = "NEGAR" in acoes
+    acoes = [a for a in acoes if a not in ("NEGAR", "CONFIRMAR")]
+
+    if negado and acoes == ["ADICIONAR"]:
+        return "REMOVER"
+    if len(acoes) > 1:
+        return "CONFLITO"
+    return acoes[0] if acoes else None
+
+
+def _palavra_estranha_no_lugar_do_verbo(tokens: list[Token], estranhas: list[Token]) -> Token | None:
+    """Uma palavra sem significado nenhum ANTES do primeiro produto (ou do
+    primeiro produto provável) está na posição do verbo — "apague os
+    refris". Nesse caso não dá para assumir que o cliente quer pedir. Só as
+    palavras de `estranhas` contam: as parecidas com produto são produto."""
+    estranhas_ids = {id(t) for t in estranhas}
+    for token in tokens:
+        if token.tipo == TipoToken.DESCONHECIDO and id(token) in estranhas_ids:
+            return token
+        if token.tipo == TipoToken.PRODUTO or token.tipo == TipoToken.DESCONHECIDO:
+            return None  # chegou a um produto (conhecido ou provável)
+    return None
 
 
 def interpretar(tokens: list[Token], pedido: Pedido) -> str:
@@ -211,24 +276,44 @@ def interpretar(tokens: list[Token], pedido: Pedido) -> str:
 
     desconhecidos = [t for t in tokens if t.tipo == TipoToken.DESCONHECIDO]
     itens = associar_itens(tokens)
+    acao = _acao_da_frase(tokens)
+    so_confirmacao = {t.valor for t in tokens if t.tipo == TipoToken.ACAO} & {"CONFIRMAR", "NEGAR"}
 
-    # "quero pedir 2 pizzas" tem dois verbos, mas os dois querem dizer
-    # ADICIONAR — só é conflito quando as ações são diferentes entre si
-    acoes_distintas = list(dict.fromkeys(t.valor for t in tokens if t.tipo == TipoToken.ACAO))
+    # resposta a uma sugestão pendente ("você quis dizer Hambúrguer?")
+    if pedido.pendencia and acao is None and not itens and so_confirmacao:
+        pendencia, pedido.pendencia = pedido.pendencia, None
+        if "CONFIRMAR" in so_confirmacao:
+            return _executar(pendencia.acao, pendencia.itens, pedido)
+        return "Ok, deixa pra lá."
+    pedido.pendencia = None  # qualquer outra frase descarta a sugestão
 
-    if len(acoes_distintas) > 1:
+    if acao == "CONFLITO":
         return "Entendi mais de um comando na mesma frase. Faça um de cada vez."
 
-    if acoes_distintas:
-        acao = acoes_distintas[0]
-    elif itens:
-        # só os itens, sem verbo ("2 hambúrgueres e um suco"): num balcão,
-        # isso é um pedido — ADICIONAR é a ação implícita
-        acao = "ADICIONAR"
-    elif desconhecidos:
-        return _resposta_para_desconhecidos(desconhecidos)
-    else:
-        return "Não entendi o que você quer fazer. Diga 'ajuda' para ver os comandos."
+    # Palavras fora do cardápio, mas parecidas com algum produto: as muito
+    # parecidas ("amburguers") são corrigidas na hora, com aviso; as
+    # parecidas só até certo ponto viram pergunta, guardada como pendência
+    # para o "sim" do cliente executar. As sem semelhança nenhuma sobram.
+    corrigidos, duvidosos, sem_sugestao = _classificar_desconhecidos(tokens, desconhecidos)
+    ha_produto_provavel = bool(itens or corrigidos or duvidosos)
+
+    if acao is None:
+        verbo_estranho = _palavra_estranha_no_lugar_do_verbo(tokens, sem_sugestao)
+        if ha_produto_provavel and verbo_estranho is None:
+            # só os itens, sem verbo ("2 hambúrgueres e um suco"): num balcão,
+            # isso é um pedido — ADICIONAR é a ação implícita. Mas só quando
+            # nenhuma palavra estranha ocupa o lugar do verbo: "apague os
+            # refris" não pode virar "adicionar refris".
+            acao = "ADICIONAR"
+        elif ha_produto_provavel:
+            return (
+                f"Não conheço o comando '{verbo_estranho.lexema}'. Para pedir, diga "
+                "'quero' ou só os itens; para tirar, 'remover'. Diga 'ajuda' para ver todos."
+            )
+        elif so_confirmacao:
+            return "Não há nada para confirmar no momento."
+        else:
+            return _resposta_para_frase_sem_pedido(tokens, desconhecidos)
 
     if acao == "AJUDA":
         return montar_ajuda()
@@ -260,11 +345,73 @@ def interpretar(tokens: list[Token], pedido: Pedido) -> str:
         pedido.itens.clear()
         return resposta
 
-    if not itens:
-        if desconhecidos:
-            return _resposta_para_desconhecidos(desconhecidos)
+    itens = _consolidar(itens + [item for _, item in corrigidos])
+
+    if not itens and not duvidosos:
+        if sem_sugestao:
+            return _resposta_para_desconhecidos(sem_sugestao)
         return "Não entendi qual produto você quer. Diga 'cardápio' para ver as opções."
 
+    if duvidosos:
+        pedido.pendencia = Pendencia(acao, _consolidar(itens + [item for _, item in duvidosos]))
+        perguntas = _juntar(
+            [f"'{lexema}' (você quis dizer {nome_exibicao(item.produto)}?)"
+             for lexema, item in duvidosos]
+        )
+        return f"Não temos {perguntas} no cardápio. Responda 'sim' para confirmar."
+
+    resposta = _executar(acao, itens, pedido)
+
+    avisos = [f"entendi '{lexema}' como {nome_exibicao(item.produto)}" for lexema, item in corrigidos]
+    if sem_sugestao:
+        # o pedido foi atendido; o que sobrou é só palavra não reconhecida
+        # ("pra viagem"), não um produto recusado
+        avisos.append("não reconheci " + _juntar([f"'{t.lexema}'" for t in sem_sugestao]))
+    if avisos:
+        resposta += " (" + "; ".join(avisos) + ")"
+    return resposta
+
+
+def _classificar_desconhecidos(
+    tokens: list[Token], desconhecidos: list[Token]
+) -> tuple[list[tuple[str, ItemPedido]], list[tuple[str, ItemPedido]], list[Token]]:
+    """Separa as palavras desconhecidas em: corrigidas sozinhas (nota alta),
+    duvidosas (nota média, pedem confirmação) e sem sugestão nenhuma. Para
+    as duas primeiras, devolve o lexema original junto de um ItemPedido com
+    a quantidade que veio antes da palavra na frase."""
+    corrigidos: list[tuple[str, ItemPedido]] = []
+    duvidosos: list[tuple[str, ItemPedido]] = []
+    sem_sugestao: list[Token] = []
+
+    for token in desconhecidos:
+        sugestao, nota = _melhor_sugestao(token.lexema)
+        if sugestao is None:
+            sem_sugestao.append(token)
+            continue
+        item = ItemPedido(_quantidade_antes_de(tokens, token), sugestao)
+        if nota >= LIMIAR_AUTOCORRECAO:
+            corrigidos.append((token.lexema, item))
+        else:
+            duvidosos.append((token.lexema, item))
+
+    return corrigidos, duvidosos, sem_sugestao
+
+
+def _quantidade_antes_de(tokens: list[Token], alvo: Token) -> int:
+    """Quantidade dita imediatamente antes de `alvo` (ignorando conectivos),
+    ou 1 — a mesma regra de associação usada para os produtos conhecidos."""
+    quantidade = 1
+    for token in tokens:
+        if token is alvo:
+            return quantidade
+        if token.tipo == TipoToken.QUANTIDADE:
+            quantidade = int(token.valor)
+        elif token.tipo in (TipoToken.PRODUTO, TipoToken.DESCONHECIDO):
+            quantidade = 1  # a quantidade valeu para esse produto, não para o próximo
+    return quantidade
+
+
+def _executar(acao: str, itens: list[ItemPedido], pedido: Pedido) -> str:
     invalidas = [item for item in itens if item.quantidade <= 0]
     if invalidas:
         return "Quantidade inválida: informe um número maior que zero."
@@ -274,15 +421,31 @@ def interpretar(tokens: list[Token], pedido: Pedido) -> str:
         return f"Quantidade alta demais: o máximo por item é {QUANTIDADE_MAXIMA}."
 
     if acao == "ADICIONAR":
-        resposta = _adicionar(itens, pedido)
-    elif acao == "REMOVER":
-        resposta = _remover(itens, pedido)
-    else:
-        return "Comando não implementado."
+        return _adicionar(itens, pedido)
+    if acao == "REMOVER":
+        return _remover(itens, pedido)
+    if acao == "CARDAPIO":
+        precos = [f"{nome_exibicao(i.produto)} custa R$ {preco(i.produto):.2f}" for i in itens]
+        return _juntar(precos) + "."
+    return "Comando não implementado."
 
-    if desconhecidos:
-        resposta += " " + _resposta_para_desconhecidos(desconhecidos)
-    return resposta
+
+def _resposta_para_frase_sem_pedido(tokens: list[Token], desconhecidos: list[Token]) -> str:
+    """Frase sem verbo e sem produto. Se alguma palavra parece um produto
+    escrito errado, vale dizer; se é só conversa ("aí é foda"), não faz
+    sentido responder "não temos 'foda' no cardápio"."""
+    com_sugestao = [t for t in desconhecidos if _melhor_sugestao(t.lexema)[0]]
+    if com_sugestao:
+        return _resposta_para_desconhecidos(com_sugestao)
+    # palavra logo depois de uma quantidade está no lugar de um produto:
+    # "2 lasanhas" merece "não temos lasanhas"
+    apos_quantidade = [
+        t for anterior, t in zip(tokens, tokens[1:])
+        if t.tipo == TipoToken.DESCONHECIDO and anterior.tipo == TipoToken.QUANTIDADE
+    ]
+    if apos_quantidade:
+        return _resposta_para_desconhecidos(apos_quantidade)
+    return "Não entendi. Diga o que quer pedir (ex.: '2 hambúrgueres'), ou 'cardápio' para ver as opções."
 
 
 def _adicionar(itens: list[ItemPedido], pedido: Pedido) -> str:

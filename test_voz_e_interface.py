@@ -1,4 +1,4 @@
-"""Testes da palavra-chave, da voz e da interface gráfica.
+"""Testes do filtro de voz, da síntese e da interface gráfica.
 
 Nenhum deles usa microfone, alto-falante ou internet: as bibliotecas
 externas são sempre substituídas por dublês. Os testes da janela são
@@ -12,9 +12,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import voice
+from lexer import analisar_lexico, tem_comando_explicito
 from semantic import Pedido
 from visual import AnimacaoCircular, MedidorDeNivel, gerar_disco_ppm
-from wakeword import extrair_comando, parece_palavra_chave
 
 try:
     import tkinter as tk
@@ -26,44 +26,35 @@ except Exception:  # sem tkinter ou sem display
     TEM_JANELA = False
 
 
-class TestPalavraChave(unittest.TestCase):
-    def test_pedido_com_palavra_chave(self):
-        self.assertEqual(
-            extrair_comando("Atendente, pedir dois hambúrgueres"),
-            "pedir dois hambúrgueres",
-        )
+class TestFiltroDeVoz(unittest.TestCase):
+    """Com o microfone aberto, só vira pedido a frase que traz um verbo de
+    comando. É o que separa "quero dois sucos" (pedido) de "dois sucos"
+    dito à mesa (conversa)."""
 
-    def test_sem_virgula(self):
-        self.assertEqual(extrair_comando("Atendente cardápio"), "cardápio")
+    def _e_comando(self, frase: str) -> bool:
+        return tem_comando_explicito(analisar_lexico(frase))
 
-    def test_variacoes_mal_transcritas(self):
-        for frase in ("Atendent pedir suco", "Atendendo pedir suco", "atendentes pedir suco"):
+    def test_frases_com_verbo_sao_comando(self):
+        for frase in (
+            "quero dois hambúrgueres", "me vê um suco", "adicione uma água",
+            "vou querer 2 refris", "remova o refri", "retire um hambúrguer",
+            "não vou querer o suco", "cardápio", "mostrar pedido", "fecha a conta",
+        ):
             with self.subTest(frase=frase):
-                self.assertEqual(extrair_comando(frase), "pedir suco")
+                self.assertTrue(self._e_comando(frase))
 
-    def test_nome_quebrado_em_duas_palavras(self):
-        self.assertEqual(extrair_comando("A tendente pedir suco"), "pedir suco")
-
-    def test_conversa_sem_palavra_chave_e_ignorada(self):
-        for frase in ("o hambúrguer daqui é bom", "pedir 2 hambúrguer", "acho caro"):
+    def test_frases_sem_verbo_sao_conversa(self):
+        for frase in (
+            "dois hambúrgueres", "o hambúrguer daqui é bom", "tô testando",
+            "acho caro", "sim", "não", "???", "",
+        ):
             with self.subTest(frase=frase):
-                self.assertIsNone(extrair_comando(frase))
+                self.assertFalse(self._e_comando(frase))
 
-    def test_vocabulario_da_lanchonete_nao_vira_palavra_chave(self):
-        """O limiar precisa separar o nome do sistema das palavras do
-        próprio domínio, senão qualquer pedido viraria ativação."""
-        for palavra in ("pedir", "remover", "hamburguer", "refrigerante",
-                        "cardapio", "finalizar", "cancelar", "batata"):
-            with self.subTest(palavra=palavra):
-                self.assertFalse(parece_palavra_chave(palavra))
-
-    def test_so_a_palavra_chave_devolve_vazio(self):
-        self.assertEqual(extrair_comando("Atendente"), "")
-
-    def test_nao_engole_quantidade_curta_depois_do_nome(self):
-        """"2" é curto, mas significa algo — não pode ser confundido com
-        resto de uma transcrição errada do nome."""
-        self.assertEqual(extrair_comando("Atendente 2 sucos"), "2 sucos")
+    def test_verbo_reconhecido_por_radical_tambem_conta(self):
+        for frase in ("adicionando 2 sucos", "removendo o refri", "cancelando tudo"):
+            with self.subTest(frase=frase):
+                self.assertTrue(self._e_comando(frase))
 
 
 class TestSintese(unittest.TestCase):
@@ -196,7 +187,16 @@ class TestJanela(unittest.TestCase):
     def test_fala_sem_palavra_chave_aparece_como_ignorada(self):
         self.janela.eventos.put(("ignorado", "conversa qualquer da mesa ao lado"))
         self.janela._processar_eventos()
-        self.assertIn("ignorado: sem a palavra-chave", self._conversa())
+        self.assertIn("ignorado: sem verbo de pedido", self._conversa())
+
+    def test_ruido_repetido_aparece_uma_vez_so(self):
+        """Regressão: ruído contínuo do microfone enchia o histórico com a
+        mesma linha "(não entendi...)" várias vezes seguidas."""
+        aviso = "(não entendi o que foi falado — pode repetir)"
+        for _ in range(5):
+            self.janela.eventos.put(("ruido", aviso))
+        self.janela._processar_eventos()
+        self.assertEqual(self._conversa().count(aviso), 1)
 
     def test_resposta_de_voz_atualiza_o_painel_e_fala_em_outra_thread(self):
         self.janela.eventos.put(("resposta_falada", "Adicionado 1x Pizza ao pedido."))

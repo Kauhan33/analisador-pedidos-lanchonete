@@ -22,15 +22,15 @@ análise léxica e validando o pedido por análise semântica — ver
 3. **Cardápio** ([cardapio.py](cardapio.py)): fonte única de produtos, preços e
    apelidos — usada pelo lexer, pela semântica e pela interface.
 4. **Execução** ([main.py](main.py)): laço interativo, com um modo `--demo`.
-5. **Voz** ([voice.py](voice.py) + [wakeword.py](wakeword.py)) *(opcional)*: transcreve
-   o pedido falado e responde em áudio, em pt-BR.
+5. **Voz** ([voice.py](voice.py)) *(opcional)*: transcreve o pedido falado e responde em
+   áudio, em pt-BR. Só frases com verbo de pedido contam como comando.
 6. **Interface gráfica** ([gui.py](gui.py) + [visual.py](visual.py)) *(opcional)*:
    cardápio, microfone animado e pedido atual na mesma tela.
 
 ## O que a análise semântica resolve
 
 A fase léxica reconhece as palavras; é a semântica que entende o **significado** da
-sequência. Três exemplos:
+sequência. Cinco exemplos:
 
 **1. A qual produto cada quantidade pertence**
 
@@ -53,12 +53,42 @@ Sistema: Removido 2x Hambúrguer (você pediu 5, mas tinha 2). Pedido vazio.
 Remover o que não foi pedido, ou mais do que existe, não é erro de escrita — é um
 pedido que só não faz sentido *naquele contexto*.
 
-**3. Erro de digitação vira sugestão**
+**3. Erro de digitação: corrige ou pergunta, conforme a semelhança**
 
 ```
-Cliente: pedir hamburgue
-Sistema: Não temos 'hamburgue' (você quis dizer Hambúrguer?) no cardápio.
+Cliente: 2 amburguers
+Sistema: Adicionado 2x Hambúrguer ao pedido (R$ 36.00). ... (entendi 'amburguers' como Hambúrguer)
+
+Cliente: quero 3 sucus
+Sistema: Não temos 'sucus' (você quis dizer Suco?) no cardápio. Responda 'sim' para confirmar.
+Cliente: sim
+Sistema: Adicionado 3x Suco ao pedido (R$ 21.00). ...
 ```
+
+Erro pequeno (semelhança ≥ 0,85) é corrigido na hora, com aviso. Erro maior vira pergunta,
+guardada como **pendência**: "sim" executa, "não" descarta, e qualquer outra frase a
+esquece. É o único ponto em que a análise semântica considera a frase *anterior*.
+
+**4. Negação inverte o verbo**
+
+```
+Cliente: não vou querer o hambúrguer
+Sistema: Removido 1x Hambúrguer do pedido. ...
+```
+
+"Não" + verbo de pedir = remover. A frase tem os tokens NEGAR e ADICIONAR; é a
+semântica que combina os dois.
+
+**5. Palavra estranha no lugar do verbo não vira pedido**
+
+```
+Cliente: xablau 2 refris
+Sistema: Não conheço o comando 'xablau'. Para pedir, diga 'quero' ou só os itens; ...
+```
+
+Só os itens, sem verbo, é um pedido ("2 refris"). Mas com uma palavra desconhecida na
+posição do verbo, assumir "pedir" seria perigoso — foi exatamente assim que, numa versão
+anterior, "remova 99 refris" *adicionou* 99 refrigerantes.
 
 ## Comandos
 
@@ -115,13 +145,15 @@ importam num balcão ao mesmo tempo: o **cardápio** com os preços, o **microfo
 
 ## Voz
 
-- **Falando**, o pedido precisa começar com a palavra-chave **"Atendente"** (ex.:
-  "Atendente, pedir dois hambúrgueres") e a resposta sai em áudio. Com o microfone
-  aberto num balcão, quase tudo que se capta é conversa: a palavra-chave é o que separa
-  pedido de conversa. Variações de transcrição errada do nome ("Atendent", "Atendendo",
-  "a tendente") são aceitas por similaridade aproximada, calibrada para não confundir
-  com o vocabulário da lanchonete.
-- **Digitando**, não precisa de palavra-chave e a resposta sai só na tela.
+- **Falando**, só frases com um **verbo de pedido** contam como comando — "quero dois
+  hambúrgueres", "me vê um suco", "adicione uma água", "remova o refri". Com o microfone
+  aberto num balcão, quase tudo que se capta é conversa; o verbo é o que separa pedido
+  de conversa. "Dois hambúrgueres" dito à mesa é ignorado; "quero dois hambúrgueres" é
+  pedido. A resposta sai em áudio.
+- **Digitando**, basta os itens ("2 hambúrgueres") e a resposta sai só na tela.
+
+Os verbos são reconhecidos pelo **radical** ("adicion-", "remov-", "retir-", "cancel-"),
+então qualquer conjugação serve: adicione, adicionar, adicionando, remova, removendo...
 
 A resposta em áudio tenta primeiro uma voz pt-BR instalada no sistema e, se não houver,
 usa o Google Text-to-Speech — assim sai em português mesmo em máquina sem voz instalada.
@@ -138,10 +170,10 @@ sem tkinter, o programa avisa e continua funcionando pelo teclado.
 python -m unittest discover -p "test_*.py" -v
 ```
 
-São 79 testes:
+São 90 testes:
 
 | Arquivo | Cobre |
 |---|---|
 | `test_lanchonete.py` | lexer, associação de quantidades, validações, consultas e cardápio |
-| `test_linguagem_natural.py` | plural, pedido sem verbo, conjugações, coloquialismos, preço por item |
-| `test_voz_e_interface.py` | palavra-chave, síntese de voz e a janela |
+| `test_linguagem_natural.py` | plural, pedido sem verbo, conjugações, negação, sugestões com "sim"/"não", sessão real de uso |
+| `test_voz_e_interface.py` | filtro de voz por verbo, síntese e a janela |

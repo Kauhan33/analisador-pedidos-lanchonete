@@ -68,7 +68,55 @@ ACOES: dict[str, str] = {
     "custa": "CARDAPIO", "custam": "CARDAPIO", "valor": "CARDAPIO", "valores": "CARDAPIO",
     # AJUDA
     "ajuda": "AJUDA", "comandos": "AJUDA", "help": "AJUDA",
+    # CONFIRMAR / NEGAR: respostas a uma sugestão ("você quis dizer X?")
+    "sim": "CONFIRMAR", "isso": "CONFIRMAR", "exato": "CONFIRMAR", "ok": "CONFIRMAR",
+    "confirmo": "CONFIRMAR", "certo": "CONFIRMAR", "aham": "CONFIRMAR", "uhum": "CONFIRMAR",
+    "nao": "NEGAR", "negativo": "NEGAR",
 }
+
+# Radicais dos verbos, para reconhecer qualquer conjugação que não esteja
+# listada acima ("adicione", "remova", "tire", "cancele", "removendo"...).
+# Uma palavra que COMEÇA com um destes radicais é tratada como a ação
+# correspondente — mas só depois de já ter sido descartada como produto,
+# quantidade ou palavra ignorada, para "pedido" não virar "pedir".
+RADICAIS_ACAO: dict[str, str] = {
+    "adicion": "ADICIONAR", "acrescent": "ADICIONAR", "inclu": "ADICIONAR",
+    "coloc": "ADICIONAR", "coloq": "ADICIONAR", "quer": "ADICIONAR", "bot": "ADICIONAR",
+    "remov": "REMOVER", "retir": "REMOVER", "tir": "REMOVER", "exclu": "REMOVER",
+    "apag": "REMOVER", "delet": "REMOVER",
+    "cancel": "CANCELAR", "limp": "CANCELAR", "esvazi": "CANCELAR",
+    "finaliz": "FINALIZAR", "fech": "FINALIZAR", "encerr": "FINALIZAR", "conclu": "FINALIZAR",
+    "mostr": "MOSTRAR", "exib": "MOSTRAR",
+}
+
+
+def acao_por_radical(palavra: str) -> str | None:
+    for radical, acao in RADICAIS_ACAO.items():
+        if palavra.startswith(radical) and len(palavra) > len(radical):
+            return acao
+    return None
+
+
+# Ações que são um pedido de fato (mexem no carrinho ou consultam algo).
+# CONFIRMAR/NEGAR ficam de fora: sozinhos, "sim" ou "não" não são comando.
+ACOES_DE_COMANDO = {
+    "ADICIONAR", "REMOVER", "CANCELAR", "FINALIZAR", "MOSTRAR", "CARDAPIO", "AJUDA",
+}
+
+
+def tem_comando_explicito(tokens: list[Token]) -> bool:
+    """
+    True se a frase traz um verbo de comando ("quero", "adicione", "me vê",
+    "remova", "cardápio"...).
+
+    É o filtro usado pela voz: com o microfone aberto, quase tudo captado é
+    conversa, e o que separa um pedido dela é justamente o verbo. "Dois
+    hambúrgueres" dito à mesa pode ser só conversa; "quero dois hambúrgueres"
+    é um pedido.
+    """
+    return any(
+        t.tipo == TipoToken.ACAO and t.valor in ACOES_DE_COMANDO for t in tokens
+    )
 
 EXTENSO: dict[str, int] = {
     "um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5,
@@ -162,7 +210,10 @@ def analisar_lexico(frase: str) -> list[Token]:
     reconhecer produtos escritos com mais de uma palavra ("batata frita",
     "cachorro quente"), e devolve a lista de tokens classificados.
     """
-    palavras = _normalizar(frase).split(" ") if frase.strip() else []
+    # split() sem argumento descarta pedaços vazios: "???" normaliza para ""
+    # e, com split(" "), viraria uma "palavra" vazia classificada como
+    # desconhecida ("não temos '' no cardápio")
+    palavras = _normalizar(frase).split()
     tokens: list[Token] = []
 
     indice = 0
@@ -211,7 +262,15 @@ def analisar_lexico(frase: str) -> list[Token]:
             indice += 1
             continue
 
-        # 6) nada reconhecido
+        # 6) ação por radical — depois de tudo, para uma palavra ignorada
+        #    ("pedido") ou um produto nunca ser confundido com verbo
+        acao = acao_por_radical(palavra)
+        if acao:
+            tokens.append(Token(TipoToken.ACAO, acao, palavra))
+            indice += 1
+            continue
+
+        # 7) nada reconhecido
         tokens.append(Token(TipoToken.DESCONHECIDO, palavra, palavra))
         indice += 1
 
