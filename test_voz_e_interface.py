@@ -248,13 +248,101 @@ class TestJanela(unittest.TestCase):
         self.janela._processar_eventos()
         self.assertEqual(self._conversa().count(aviso), 1)
 
-    def test_resposta_de_voz_atualiza_o_painel_e_fala_em_outra_thread(self):
-        self.janela.eventos.put(("resposta_falada", "Adicionado 1x Pizza ao pedido."))
-        with patch("gui.falar") as falar_mock, patch("gui.threading.Thread") as thread_mock:
-            self.janela._processar_eventos()
+    def test_resposta_de_voz_atualiza_o_painel(self):
+        self.janela.eventos.put(("resposta", "Adicionado 1x Pizza ao pedido."))
+        self.janela._processar_eventos()
         self.assertIn("Adicionado 1x Pizza", self._conversa())
-        thread_mock.assert_called_once()
-        falar_mock.assert_not_called()
+
+    # --- sessão de voz de ponta a ponta, com o microfone e a fala mockados ---
+
+    def _sessao_de_voz(self, falas):
+        """Roda o laço de escuta com transcrições simuladas até "sair",
+        devolvendo o que foi falado em áudio e a ordem dos eventos."""
+        from voice import ErroReconhecimento
+
+        iterador = iter(list(falas) + ["sair"])
+
+        def ouvir(*_a, **_k):
+            valor = next(iterador)
+            if isinstance(valor, Exception):
+                raise valor
+            return valor
+
+        faladas, ordem = [], []
+        ouvidor = MagicMock()
+        ouvidor.ouvir.side_effect = ouvir
+        self.janela._ouvidor = ouvidor
+        self.janela.escutando.set()
+
+        def falar_falso(texto):
+            faladas.append(texto)
+            ordem.append("fala")
+
+        chamada_original = ouvidor.ouvir.side_effect
+
+        def ouvir_registrando(*a, **k):
+            ordem.append("ouvir")
+            return chamada_original(*a, **k)
+
+        ouvidor.ouvir.side_effect = ouvir_registrando
+
+        with patch("gui.falar", falar_falso):
+            self.janela._laco_de_escuta()  # roda na thread do teste, até "sair"
+
+        # esvazia a fila como o tkinter faria, sem encerrar a janela
+        with patch.object(self.janela, "encerrar"):
+            self.janela._processar_eventos()
+        return faladas, ordem
+
+    def test_sessao_de_voz_completa(self):
+        """Transcrições como o Google devolve — sem pontuação, plural
+        coloquial, verbo errado, "me vê" virando "me ver" — precisam
+        resultar no carrinho certo."""
+        faladas, _ = self._sessao_de_voz([
+            "quero dois hamburguers e um refri",
+            "me ver uma agua",
+            "adissione uma pizza",
+            "remova todas as aguas",
+            "nao vou querer a pizza",
+        ])
+        self.assertEqual(self.janela.pedido.itens, {"hamburguer": 2, "refrigerante": 1})
+        self.assertEqual(len(faladas), 5)
+
+    def test_por_voz_frase_sem_verbo_e_ignorada_e_nao_falada(self):
+        faladas, _ = self._sessao_de_voz(["dois sucos", "quero um suco"])
+        self.assertEqual(self.janela.pedido.itens, {"suco": 1})
+        self.assertEqual(len(faladas), 1)
+        self.assertIn("ignorado: sem verbo de pedido", self._conversa())
+
+    def test_sim_por_voz_confirma_a_sugestao(self):
+        """Regressão: "sim" não tem verbo de comando e era ignorado pelo
+        filtro de voz — a sugestão nunca podia ser confirmada falando."""
+        faladas, _ = self._sessao_de_voz(["quero 3 sucus", "sim"])
+        self.assertEqual(self.janela.pedido.itens, {"suco": 3})
+        self.assertTrue(any("quis dizer Suco" in f for f in faladas))
+
+    def test_sim_por_voz_sem_pergunta_pendente_e_ignorado(self):
+        faladas, _ = self._sessao_de_voz(["sim"])
+        self.assertEqual(faladas, [])
+        self.assertIn("ignorado", self._conversa())
+
+    def test_fala_acontece_antes_de_voltar_a_ouvir(self):
+        """Regressão: as respostas eram faladas em threads paralelas, se
+        atropelavam no motor de voz (algumas saíam mudas) e o microfone
+        ficava aberto durante a fala, ouvindo o próprio sistema. Agora a
+        thread de escuta fala e só então volta a ouvir."""
+        _, ordem = self._sessao_de_voz(["quero um suco", "quero uma agua"])
+        # ouvir -> fala -> ouvir -> fala -> ouvir("sair")
+        self.assertEqual(ordem, ["ouvir", "fala", "ouvir", "fala", "ouvir"])
+
+    def test_audio_le_valores_e_quantidades_de_forma_natural(self):
+        from semantic import texto_para_audio
+
+        self.assertEqual(
+            texto_para_audio("Adicionado 2x Suco ao pedido (R$ 14.00). Total do pedido: R$ 14.50."),
+            "Adicionado 2 Suco ao pedido, 14 reais. Total do pedido: 14 reais e 50 centavos.",
+        )
+        self.assertEqual(texto_para_audio("Total: R$ 1.01"), "Total: 1 real e 1 centavo")
 
     def test_sair_digitado_encerra(self):
         with patch.object(self.janela, "encerrar") as encerrar_mock:

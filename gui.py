@@ -35,7 +35,7 @@ import tkinter as tk
 from tkinter import font as tkfont
 
 import cardapio
-from lexer import analisar_lexico, tem_comando_explicito
+from lexer import analisar_lexico, e_confirmacao_ou_negacao, tem_comando_explicito
 from semantic import Pedido, interpretar, texto_para_audio
 from visual import AnimacaoCircular, MedidorDeNivel, gerar_disco_ppm, misturar_cores
 from voice import STT_DISPONIVEL, ErroReconhecimento, OuvidorContinuo, falar
@@ -93,8 +93,8 @@ class JanelaLanchonete:
         self._atualizar_pedido()
 
         self.raiz.protocol("WM_DELETE_WINDOW", self.encerrar)
-        self.raiz.after(INTERVALO_QUADRO_MS, self._quadro)
-        self.raiz.after(80, self._processar_eventos)
+        self._id_quadro = self.raiz.after(INTERVALO_QUADRO_MS, self._quadro)
+        self._id_eventos = self.raiz.after(80, self._processar_eventos)
 
     # ------------------------------------------------------------------
     # Construção da tela
@@ -321,7 +321,7 @@ class JanelaLanchonete:
 
         self._atualizar_barras(self.medidor.niveis())
         self._atualizar_arco()
-        self.raiz.after(INTERVALO_QUADRO_MS, self._quadro)
+        self._id_quadro = self.raiz.after(INTERVALO_QUADRO_MS, self._quadro)
 
     def _atualizar_arco(self) -> None:
         centro_x, centro_y = self.centro
@@ -506,16 +506,30 @@ class JanelaLanchonete:
                 return
 
             # Com o microfone aberto, só vira pedido o que tem um verbo de
-            # comando ("quero", "me vê", "remova"...). O resto é conversa.
+            # comando ("quero", "me vê", "remova"...). O resto é conversa —
+            # exceto "sim"/"não" quando o sistema acabou de fazer uma
+            # pergunta ("você quis dizer Suco?"): aí é resposta, não conversa.
             tokens = analisar_lexico(frase)
-            if not tem_comando_explicito(tokens):
+            respondendo = self.pedido.pendencia is not None and e_confirmacao_ou_negacao(tokens)
+            if not tem_comando_explicito(tokens) and not respondendo:
                 self.eventos.put(("ignorado", frase))
                 continue
 
             self.eventos.put(("voz", frase))
             with self._trava_pedido:
                 resposta = interpretar(tokens, self.pedido)
-            self.eventos.put(("resposta_falada", resposta))
+            self.eventos.put(("resposta", resposta))
+
+            # A fala acontece AQUI, na thread de escuta, e não numa thread
+            # à parte por resposta. Dois motivos: (1) respostas em threads
+            # paralelas se atropelam no motor de voz — algumas saíam mudas;
+            # (2) enquanto o sistema fala, o microfone precisa estar
+            # fechado, senão ele ouve a própria voz. Falar antes de voltar
+            # ao ouvir() resolve os dois. A interface não trava: esta não é
+            # a thread do tkinter.
+            self.eventos.put(("falando", ""))
+            falar(texto_para_audio(resposta))
+            self.eventos.put(("ouvindo", ""))
 
     def _processar(self, frase: str) -> str:
         return interpretar(analisar_lexico(frase), self.pedido)
@@ -541,14 +555,15 @@ class JanelaLanchonete:
                     self._escrever(conteudo, "aviso")
                 elif tipo == "ruido":
                     self._escrever_sem_repetir(conteudo, "aviso")
-                elif tipo == "resposta_falada":
+                elif tipo == "resposta":
                     self._escrever(f"Sistema: {conteudo}", "sistema")
                     self._atualizar_pedido()
-                    # falar bloqueia alguns segundos: em outra thread, para
-                    # não congelar a animação nem a digitação
-                    threading.Thread(
-                        target=falar, args=(texto_para_audio(conteudo),), daemon=True
-                    ).start()
+                elif tipo == "falando":
+                    # o microfone está fechado enquanto a resposta é falada:
+                    # mostra isso no círculo, para ninguém falar no vazio
+                    self.canvas.itemconfig(self.item_texto_circulo, text="falando...")
+                elif tipo == "ouvindo":
+                    self._atualizar_visual_do_circulo()
                 elif tipo == "erro_fatal":
                     self.escutando.clear()
                     self._atualizar_visual_do_circulo()
@@ -559,7 +574,7 @@ class JanelaLanchonete:
         except queue.Empty:
             pass
 
-        self.raiz.after(80, self._processar_eventos)
+        self._id_eventos = self.raiz.after(80, self._processar_eventos)
 
     def _escrever(self, texto: str, estilo: str) -> None:
         self.conversa.configure(state=tk.NORMAL)
@@ -581,6 +596,14 @@ class JanelaLanchonete:
 
     def encerrar(self) -> None:
         self.escutando.clear()
+        # cancela a animação e o consumo da fila antes de destruir a janela:
+        # um after() disparando depois do destroy gera "invalid command name"
+        for id_agendado in (getattr(self, "_id_quadro", None), getattr(self, "_id_eventos", None)):
+            if id_agendado:
+                try:
+                    self.raiz.after_cancel(id_agendado)
+                except tk.TclError:
+                    pass
         try:
             self.raiz.destroy()
         except tk.TclError:

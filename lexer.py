@@ -140,6 +140,17 @@ def tem_comando_explicito(tokens: list[Token]) -> bool:
         t.tipo == TipoToken.ACAO and t.valor in ACOES_DE_COMANDO for t in tokens
     )
 
+
+def e_confirmacao_ou_negacao(tokens: list[Token]) -> bool:
+    """True para "sim", "não", "isso", "ok"... ditos sozinhos. Não são
+    comando, mas são resposta a uma pergunta ("você quis dizer Suco?") — e
+    por voz precisam passar pelo filtro quando há uma pergunta pendente."""
+    return bool(tokens) and all(
+        (t.tipo == TipoToken.ACAO and t.valor in ("CONFIRMAR", "NEGAR"))
+        or t.tipo == TipoToken.CONECTIVO
+        for t in tokens
+    )
+
 EXTENSO: dict[str, int] = {
     "um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5,
     "seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10, "duzia": 12,

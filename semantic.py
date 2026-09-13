@@ -16,6 +16,7 @@ sozinha não consegue: entender o *significado* da sequência.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -225,14 +226,34 @@ AJUDA_FALADA = (
 )
 
 
+def _valor_falado(match: re.Match) -> str:
+    """"R$ 43.50" -> "43 reais e 50 centavos"; "R$ 6.00" -> "6 reais"."""
+    reais, centavos = int(match.group(1)), int(match.group(2))
+    texto = f"{reais} {'real' if reais == 1 else 'reais'}"
+    if centavos:
+        texto += f" e {centavos} {'centavo' if centavos == 1 else 'centavos'}"
+    return texto
+
+
 def texto_para_audio(resposta: str) -> str:
-    """Versão adequada para ser falada: listas longas viram resumo, e a
-    tela fica com o conteúdo completo."""
+    """
+    Versão da resposta adequada para ser falada.
+
+    Listas longas (ajuda, cardápio) viram resumo — a tela fica com o
+    conteúdo completo. E o que é abreviação de tela vira fala: o motor de
+    voz leria "2x Hambúrguer" como "dois xis" e "R$ 43.50" como "erre
+    cifrão quarenta e três ponto cinquenta".
+    """
     if resposta.startswith("Comandos disponíveis:"):
         return AJUDA_FALADA
     if resposta.startswith("Cardápio:"):
         return cardapio.falado()
-    return resposta
+
+    falado = re.sub(r"\b(\d+)x ", r"\1 ", resposta)                  # "2x Suco" -> "2 Suco"
+    falado = re.sub(r"R\$ ?(\d+)\.(\d{2})", _valor_falado, falado)   # "R$ 43.50" -> "43 reais e 50 centavos"
+    falado = falado.replace("->", ":").replace(" | ", ". ")
+    falado = falado.replace(" (", ", ").replace("(", "").replace(")", "")  # "(42 reais)" -> ", 42 reais"
+    return falado
 
 
 # --------------------------------------------------------------------------
@@ -279,6 +300,17 @@ def _acao_da_frase(tokens: list[Token]) -> str | None:
     acoes = list(dict.fromkeys(t.valor for t in tokens if t.tipo == TipoToken.ACAO))
     negado = "NEGAR" in acoes
     acoes = [a for a in acoes if a not in ("NEGAR", "CONFIRMAR")]
+    ha_produto = any(t.tipo == TipoToken.PRODUTO for t in tokens)
+
+    # "ver o preço do suco" / "mostrar o cardápio": ver + consulta é consulta
+    if "MOSTRAR" in acoes and "CARDAPIO" in acoes:
+        acoes = [a for a in acoes if a != "MOSTRAR"]
+
+    # "me vê um suco" costuma ser transcrito como "me VER um suco", e "ver"
+    # sozinho seria MOSTRAR. Ninguém pede para "mostrar 2 sucos" querendo
+    # ver o carrinho: ver + produto, no balcão, é pedir.
+    if acoes == ["MOSTRAR"] and ha_produto:
+        acoes = ["ADICIONAR"]
 
     if negado and acoes == ["ADICIONAR"]:
         return "REMOVER"
